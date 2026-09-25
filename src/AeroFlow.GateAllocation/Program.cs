@@ -1,3 +1,4 @@
+using AeroFlow.GateAllocation.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,6 +10,11 @@ builder.Logging.AddConsole();
 builder.Services.AddControllers();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks();
+
+// Edges: the clock and the store are the only side effects; the domain stays pure.
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<IGatePlanStore>(sp =>
+    new InMemoryGatePlanStore(DemoGatePlan.Create(sp.GetRequiredService<TimeProvider>().GetUtcNow())));
 
 // ---------------------------------------------------------------------------
 // OpenTelemetry stub — enable when the squad wires an exporter (OTLP / App Insights).

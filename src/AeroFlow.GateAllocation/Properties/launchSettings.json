@@ -1,6 +1,6 @@
 {
   "profiles": {
-    "AeroFlow.ServiceTemplate": {
+    "AeroFlow.GateAllocation": {
       "commandName": "Project",
       "dotnetRunMessages": true,
       "launchBrowser": false,

@@ -2,7 +2,7 @@ using System.Net;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
-namespace AeroFlow.ServiceTemplate.Tests;
+namespace AeroFlow.GateAllocation.Tests;
 
 public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Program>>
 {
@@ -24,17 +24,17 @@ public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Pr
     }
 
     [Fact]
-    public async Task Bookings_ping_returns_ok()
+    public async Task Gates_ping_returns_ok()
     {
-        var response = await _client.GetAsync("/api/bookings/ping");
+        var response = await _client.GetAsync("/api/gates/ping");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
-    public async Task Bookings_unknown_id_returns_problem_details()
+    public async Task Unknown_allocation_returns_problem_details()
     {
-        var response = await _client.GetAsync("/api/bookings/does-not-exist");
+        var response = await _client.GetAsync("/api/allocations/ZZ9999");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);

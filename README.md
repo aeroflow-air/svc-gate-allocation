@@ -108,4 +108,4 @@ This repository calls the reusable workflow in `aeroflow-workflows` (pinned to `
 
 ## Licence / ownership
 
-Internal AeroFlow Air service. Public repository.
+Internal AeroFlow Air service. Public repository under `aeroflow-air`.

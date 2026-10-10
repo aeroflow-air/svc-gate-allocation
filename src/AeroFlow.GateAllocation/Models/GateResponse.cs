@@ -6,6 +6,11 @@ namespace AeroFlow.GateAllocation.Models;
 /// API shape for a gate and its allocations, earliest first. The <see cref="GateStatus"/> union is flattened
 /// to a <c>status</c> string plus a <c>closedReason</c> that is only present for closed gates.
 /// </summary>
+/// <param name="Id">Gate id.</param>
+/// <param name="MaxAircraftSize">Largest aircraft size the gate can take.</param>
+/// <param name="Status"><c>Open</c> or <c>Closed</c>.</param>
+/// <param name="ClosedReason">Why the gate is closed; null when open.</param>
+/// <param name="Allocations">Allocations at this gate, earliest first.</param>
 public sealed record GateResponse(
     string Id,
     string MaxAircraftSize,

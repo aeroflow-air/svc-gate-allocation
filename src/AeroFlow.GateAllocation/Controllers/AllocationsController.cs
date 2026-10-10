@@ -13,6 +13,11 @@ namespace AeroFlow.GateAllocation.Controllers;
 [Route("api/allocations")]
 public sealed class AllocationsController(IGatePlanStore store) : ControllerBase
 {
+    /// <summary>Gets the current gate allocation for a flight.</summary>
+    /// <param name="flightNumber">Flight number, for example <c>AF204</c>.</param>
+    /// <response code="200">The allocation.</response>
+    /// <response code="400">The flight number or body is invalid.</response>
+    /// <response code="404">The flight has no allocation, or the gate does not exist.</response>
     [HttpGet("{flightNumber}")]
     [ProducesResponseType(typeof(AllocationResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -23,6 +28,11 @@ public sealed class AllocationsController(IGatePlanStore store) : ControllerBase
             .Match<ActionResult>(a => Ok(AllocationResponse.From(a)), this.Problem);
 
     /// <summary>Allocates a gate to a flight. With no <c>gate</c> in the body the planner picks the best free one.</summary>
+    /// <param name="request">Flight, aircraft size, on/off-block window and optional gate.</param>
+    /// <response code="201">The new allocation.</response>
+    /// <response code="400">The flight number or body is invalid.</response>
+    /// <response code="404">The flight has no allocation, or the gate does not exist.</response>
+    /// <response code="409">The change breaks a planning rule (gate busy, too small or closed).</response>
     [HttpPost]
     [ProducesResponseType(typeof(AllocationResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -35,6 +45,13 @@ public sealed class AllocationsController(IGatePlanStore store) : ControllerBase
                 a => CreatedAtAction(nameof(GetByFlight), new { flightNumber = a.Flight.Value }, AllocationResponse.From(a)),
                 this.Problem);
 
+    /// <summary>Moves a flight to a different gate.</summary>
+    /// <param name="flightNumber">Flight number, for example <c>AF204</c>.</param>
+    /// <param name="request">The new gate.</param>
+    /// <response code="200">The updated allocation.</response>
+    /// <response code="400">The flight number or body is invalid.</response>
+    /// <response code="404">The flight has no allocation, or the gate does not exist.</response>
+    /// <response code="409">The change breaks a planning rule (gate busy, too small or closed).</response>
     [HttpPut("{flightNumber}/gate")]
     [ProducesResponseType(typeof(AllocationResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -47,6 +64,12 @@ public sealed class AllocationsController(IGatePlanStore store) : ControllerBase
         .Match<ActionResult>(a => Ok(AllocationResponse.From(a)), this.Problem);
 
     /// <summary>Moves the on-block window (e.g. after a delay). The flight keeps its gate or the change is rejected.</summary>
+    /// <param name="flightNumber">Flight number, for example <c>AF204</c>.</param>
+    /// <param name="request">The new on-block and off-block times.</param>
+    /// <response code="200">The updated allocation.</response>
+    /// <response code="400">The flight number or body is invalid.</response>
+    /// <response code="404">The flight has no allocation, or the gate does not exist.</response>
+    /// <response code="409">The change breaks a planning rule (gate busy, too small or closed).</response>
     [HttpPut("{flightNumber}/window")]
     [ProducesResponseType(typeof(AllocationResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -58,6 +81,11 @@ public sealed class AllocationsController(IGatePlanStore store) : ControllerBase
             Run(new RetimeTurn(flight, window), flight)))
         .Match<ActionResult>(a => Ok(AllocationResponse.From(a)), this.Problem);
 
+    /// <summary>Releases a flight's gate.</summary>
+    /// <param name="flightNumber">Flight number, for example <c>AF204</c>.</param>
+    /// <response code="204">The gate was released.</response>
+    /// <response code="400">The flight number or body is invalid.</response>
+    /// <response code="404">The flight has no allocation.</response>
     [HttpDelete("{flightNumber}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]

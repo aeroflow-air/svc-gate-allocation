@@ -14,6 +14,7 @@ namespace AeroFlow.GateAllocation.Controllers;
 public sealed class GatesController(IGatePlanStore store, TimeProvider time) : ControllerBase
 {
     /// <summary>Lightweight hello for the gate-allocation domain — proves the API is up.</summary>
+    /// <response code="200">Service name, message and the server's current UTC time.</response>
     [HttpGet("ping")]
     [ProducesResponseType(typeof(GatePingResponse), StatusCodes.Status200OK)]
     public ActionResult<GatePingResponse> Ping() =>
@@ -23,6 +24,7 @@ public sealed class GatesController(IGatePlanStore store, TimeProvider time) : C
             UtcNow: time.GetUtcNow()));
 
     /// <summary>All gates, ordered by id, each with its allocations.</summary>
+    /// <response code="200">Every gate with its allocations.</response>
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<GateResponse>), StatusCodes.Status200OK)]
     public ActionResult<IReadOnlyList<GateResponse>> GetAll()
@@ -34,6 +36,11 @@ public sealed class GatesController(IGatePlanStore store, TimeProvider time) : C
             .ToList());
     }
 
+    /// <summary>Gets one gate and its allocations.</summary>
+    /// <param name="gate">Gate id, for example <c>A1</c>.</param>
+    /// <response code="200">The gate.</response>
+    /// <response code="400">The gate id is invalid.</response>
+    /// <response code="404">No gate with that id.</response>
     [HttpGet("{gate}")]
     [ProducesResponseType(typeof(GateResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -47,6 +54,12 @@ public sealed class GatesController(IGatePlanStore store, TimeProvider time) : C
     }
 
     /// <summary>Takes a gate out of service. Rejected while it still has allocations.</summary>
+    /// <param name="gate">Gate id, for example <c>A1</c>.</param>
+    /// <param name="request">Why the gate is closing.</param>
+    /// <response code="200">The closed gate.</response>
+    /// <response code="400">The gate id or reason is missing or invalid.</response>
+    /// <response code="404">No gate with that id.</response>
+    /// <response code="409">The gate still has allocations or is already closed.</response>
     [HttpPost("{gate}/close")]
     [ProducesResponseType(typeof(GateResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -58,6 +71,12 @@ public sealed class GatesController(IGatePlanStore store, TimeProvider time) : C
             new CloseGate(id, reason)))
         .Match<ActionResult>(command => Run(command, command.Gate), this.Problem);
 
+    /// <summary>Puts a closed gate back into service.</summary>
+    /// <param name="gate">Gate id, for example <c>A1</c>.</param>
+    /// <response code="200">The reopened gate.</response>
+    /// <response code="400">The gate id is invalid.</response>
+    /// <response code="404">No gate with that id.</response>
+    /// <response code="409">The gate is already open.</response>
     [HttpPost("{gate}/reopen")]
     [ProducesResponseType(typeof(GateResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]

@@ -1,4 +1,7 @@
+using System.Reflection;
 using AeroFlow.GateAllocation.Storage;
+using Microsoft.OpenApi;
+using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,6 +13,29 @@ builder.Logging.AddConsole();
 builder.Services.AddControllers();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks();
+
+// API docs: Swashbuckle generates the OpenAPI document (net8 has no built-in generator; that arrived in .NET 9),
+// Scalar renders it at /scalar. Gated by ApiDocs:Enabled, which is true in appsettings.Development.json and
+// false by default, so Production never exposes the docs unless someone opts in via config.
+var apiDocsEnabled = builder.Configuration.GetValue("ApiDocs:Enabled", false);
+if (apiDocsEnabled)
+{
+    builder.Services.AddEndpointsApiExplorer();
+    builder.Services.AddSwaggerGen(options =>
+    {
+        options.SwaggerDoc("v1", new OpenApiInfo
+        {
+            Title = "AeroFlow Gate Allocation API",
+            Version = "v1",
+            Description = "Gate planning for AeroFlow: list gates, allocate flights to gates (or let the planner pick), reassign, retime, release, and close or reopen gates.",
+        });
+        var xml = Path.Combine(AppContext.BaseDirectory, $"{Assembly.GetExecutingAssembly().GetName().Name}.xml");
+        if (File.Exists(xml))
+        {
+            options.IncludeXmlComments(xml);
+        }
+    });
+}
 
 // Edges: the clock and the store are the only side effects; the domain stays pure.
 builder.Services.AddSingleton(TimeProvider.System);
@@ -45,6 +71,12 @@ if (!app.Environment.IsDevelopment())
 
 app.MapHealthChecks("/health");
 app.MapControllers();
+
+if (apiDocsEnabled)
+{
+    app.UseSwagger(options => options.RouteTemplate = "openapi/{documentName}.json");
+    app.MapScalarApiReference(options => options.WithTitle("AeroFlow Gate Allocation API"));
+}
 
 app.Run();
 

@@ -8,10 +8,15 @@ namespace AeroFlow.GateAllocation.Models;
 /// </summary>
 public sealed record AllocationRequest
 {
+    /// <summary>Flight number, for example <c>AF204</c>.</summary>
     public string? FlightNumber { get; init; }
+    /// <summary>Aircraft size category; must fit the gate.</summary>
     public string? AircraftSize { get; init; }
+    /// <summary>When the aircraft arrives at the gate.</summary>
     public DateTimeOffset? OnBlock { get; init; }
+    /// <summary>When the aircraft leaves the gate; must be after onBlock.</summary>
     public DateTimeOffset? OffBlock { get; init; }
+    /// <summary>Gate id. Omit to let the planner pick the best free gate.</summary>
     public string? Gate { get; init; }
 
     public Result<AllocateGate> ToCommand() =>
@@ -25,19 +30,23 @@ public sealed record AllocationRequest
 /// <summary>Body for <c>PUT api/allocations/{flightNumber}/gate</c>.</summary>
 public sealed record ReassignRequest
 {
+    /// <summary>The new gate id.</summary>
     public string? Gate { get; init; }
 }
 
 /// <summary>Body for <c>PUT api/allocations/{flightNumber}/window</c>.</summary>
 public sealed record RetimeRequest
 {
+    /// <summary>When the aircraft arrives at the gate.</summary>
     public DateTimeOffset? OnBlock { get; init; }
+    /// <summary>When the aircraft leaves the gate; must be after onBlock.</summary>
     public DateTimeOffset? OffBlock { get; init; }
 }
 
 /// <summary>Body for <c>POST api/gates/{gate}/close</c>.</summary>
 public sealed record CloseGateRequest
 {
+    /// <summary>Why the gate is being closed.</summary>
     public string? Reason { get; init; }
 }
 

@@ -3,6 +3,15 @@
   <PropertyGroup>
     <RootNamespace>AeroFlow.GateAllocation</RootNamespace>
     <AssemblyName>AeroFlow.GateAllocation</AssemblyName>
+    <!-- XML docs feed the OpenAPI descriptions; undocumented public members (domain types) aren't errors. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Scalar.AspNetCore" Version="2.17.14" />
+    <PackageReference Include="Swashbuckle.AspNetCore.Swagger" Version="10.3.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.3.0" />
+  </ItemGroup>
 
 </Project>

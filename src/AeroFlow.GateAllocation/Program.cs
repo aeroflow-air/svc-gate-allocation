@@ -1,4 +1,5 @@
 using System.Reflection;
+using AeroFlow.GateAllocation.Messaging;
 using AeroFlow.GateAllocation.Storage;
 using Microsoft.OpenApi;
 using Scalar.AspNetCore;
@@ -41,6 +42,17 @@ if (apiDocsEnabled)
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IGatePlanStore>(sp =>
     new InMemoryGatePlanStore(DemoGatePlan.Create(sp.GetRequiredService<TimeProvider>().GetUtcNow())));
+
+// Flight events (svc-gate-allocation#4): react to the simulator on the flight-events topic. Only wired when a
+// "messaging" connection string exists (the aeroflow-local AppHost supplies it via WithReference), so a plain
+// `dotnet run`, the container and the tests still start without Service Bus.
+builder.Services.Configure<FlightEventsOptions>(builder.Configuration.GetSection(FlightEventsOptions.SectionName));
+builder.Services.AddSingleton<GateEventHandler>();
+if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString(FlightEventsOptions.ConnectionName)))
+{
+    builder.AddAzureServiceBusClient(FlightEventsOptions.ConnectionName);
+    builder.Services.AddHostedService<FlightEventsProcessor>();
+}
 
 // ---------------------------------------------------------------------------
 // OpenTelemetry stub — enable when the squad wires an exporter (OTLP / App Insights).

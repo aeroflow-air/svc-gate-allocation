@@ -12,6 +12,7 @@ namespace AeroFlow.GateAllocation.Messaging;
 public sealed partial class FlightEventsProcessor(
     ServiceBusClient client,
     GateEventHandler handler,
+    IGateEventPublisher publisher,
     IOptions<FlightEventsOptions> options,
     ILogger<FlightEventsProcessor> logger) : IHostedService, IAsyncDisposable
 {
@@ -69,10 +70,15 @@ public sealed partial class FlightEventsProcessor(
             return;
         }
 
-        switch (handler.Handle(evt))
+        switch (handler.Handle(evt, out var gateEvents))
         {
             case HandleOutcome.Applied a:
                 LogApplied(a.Command, evt.FlightNumber, evt.EventType);
+                if (gateEvents.Count > 0)
+                {
+                    await publisher.PublishAsync([.. gateEvents], args.CancellationToken);
+                }
+
                 break;
             case HandleOutcome.Rejected r:
                 LogRejected(evt.EventType, evt.FlightNumber, r.Error.Code, r.Error.Message);

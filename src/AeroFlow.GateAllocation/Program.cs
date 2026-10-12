@@ -48,10 +48,19 @@ builder.Services.AddSingleton<IGatePlanStore>(sp =>
 // `dotnet run`, the container and the tests still start without Service Bus.
 builder.Services.Configure<FlightEventsOptions>(builder.Configuration.GetSection(FlightEventsOptions.SectionName));
 builder.Services.AddSingleton<GateEventHandler>();
+
+// Gate events (platform-handbook#77): GateAssigned/GateChanged/GateReleased go to the gate-events topic, but only
+// when the same "messaging" connection exists; otherwise a no-op publisher keeps everything in process.
+builder.Services.Configure<GateEventsOptions>(builder.Configuration.GetSection(GateEventsOptions.SectionName));
 if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString(FlightEventsOptions.ConnectionName)))
 {
     builder.AddAzureServiceBusClient(FlightEventsOptions.ConnectionName);
+    builder.Services.AddSingleton<IGateEventPublisher, ServiceBusGateEventPublisher>();
     builder.Services.AddHostedService<FlightEventsProcessor>();
+}
+else
+{
+    builder.Services.AddSingleton<IGateEventPublisher, NoOpGateEventPublisher>();
 }
 
 // ---------------------------------------------------------------------------

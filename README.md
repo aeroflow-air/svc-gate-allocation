@@ -51,6 +51,20 @@ The simulator sends no aircraft type, so every turn is size `C` (`FlightEvents:D
 
 Settings (`FlightEvents` section): `Topic` (`flight-events`), `Subscription` (`gate-allocation`), `HomeAirport`, `GateMinutesBeforeDeparture` (45), `DefaultAircraftSize`. The event contract is a local copy of `AeroFlow.Local.FlightEvents.FlightEvent`.
 
+## Gate events (published)
+
+Each gate change caused by a flight event is published to the Service Bus topic **`gate-events`** (owned by this service, ADR-0013). The JSON body is a [`GateEvent`](src/AeroFlow.GateAllocation/Domain/GateEvent.cs); `Subject` is the event type, `CorrelationId` the simulator's flight id (or the flight number if there is none) and `MessageId` the event id.
+
+| Event | Caused by | Fields |
+|---|---|---|
+| `GateAssigned` | `Scheduled` departure gets a gate | `flightNumber`, `flightId`, `gate`, `onBlock`, `offBlock`, `occurredAt` |
+| `GateChanged` | `Delayed` retimes the turn (same gate, new window), or a reassignment (`previousGate` set) | as above, plus `previousGate` when the gate moved |
+| `GateReleased` | `Departed` or `Cancelled` | `flightNumber`, `flightId`, `gate`, `occurredAt` |
+
+Events are worked out by comparing the flight's allocation before and after the change (`GateEvents.Diff`, pure). Rejected or ignored flight events publish nothing. Publishing only happens when the `messaging` connection exists. Without it a no-op publisher is used, so `dotnet run`, the container and the tests need no Service Bus. Changes made through the HTTP API are not published yet.
+
+Settings (`GateEvents` section): `Topic` (`gate-events`).
+
 ## Gate allocation
 
 The domain lives in [`src/AeroFlow.GateAllocation/Domain`](src/AeroFlow.GateAllocation/Domain) and is pure: no clock, storage or HTTP.

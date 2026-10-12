@@ -24,12 +24,17 @@ public abstract record HandleOutcome
 /// <c>Scheduled</c> allocates a gate (the planner picks one), <c>Delayed</c> retimes the turn,
 /// <c>Departed</c> and <c>Cancelled</c> release the gate. Arrivals are ignored for now.
 /// </summary>
-public sealed class GateEventHandler(IGatePlanStore store, IOptions<FlightEventsOptions> options)
+public sealed class GateEventHandler(IGatePlanStore store, IOptions<FlightEventsOptions> options, TimeProvider? clock = null)
 {
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly FlightEventsOptions _options = options.Value;
 
-    public HandleOutcome Handle(FlightEventMessage evt)
+    public HandleOutcome Handle(FlightEventMessage evt) => Handle(evt, out _);
+
+    /// <summary>As <see cref="Handle(FlightEventMessage)"/>, also returning the gate events the change produced (empty unless applied).</summary>
+    public HandleOutcome Handle(FlightEventMessage evt, out IReadOnlyList<GateEvent> gateEvents)
     {
+        gateEvents = [];
         if (!string.Equals(evt.Origin, _options.HomeAirport, StringComparison.OrdinalIgnoreCase))
         {
             return new HandleOutcome.Ignored($"not departing {_options.HomeAirport}");
@@ -39,15 +44,36 @@ public sealed class GateEventHandler(IGatePlanStore store, IOptions<FlightEvents
         return command switch
         {
             Result<Option<GateCommand>>.Failure f => new HandleOutcome.Rejected(f.Error),
-            Result<Option<GateCommand>>.Ok { Value: Option<GateCommand>.Some some } => Apply(some.Value),
+            Result<Option<GateCommand>>.Ok { Value: Option<GateCommand>.Some some } => Apply(some.Value, evt, out gateEvents),
             _ => new HandleOutcome.Ignored($"{evt.EventType} does not change the gate plan"),
         };
     }
 
-    private HandleOutcome Apply(GateCommand command) =>
-        store.Update(plan => GatePlanner.Apply(plan, command)).Match<HandleOutcome>(
+    private HandleOutcome Apply(GateCommand command, FlightEventMessage evt, out IReadOnlyList<GateEvent> gateEvents)
+    {
+        GatePlan? before = null;
+        var result = store.Update(plan =>
+        {
+            before = plan;
+            return GatePlanner.Apply(plan, command);
+        });
+
+        gateEvents = result is Result<GatePlan>.Ok ok && before is not null && FlightOf(command) is { } flight
+            ? GateEvents.Diff(before, ok.Value, flight, evt.FlightId, _clock.GetUtcNow(), Guid.NewGuid)
+            : [];
+        return result.Match<HandleOutcome>(
             _ => new HandleOutcome.Applied(command.Name),
             error => new HandleOutcome.Rejected(error));
+    }
+
+    private static FlightNumber? FlightOf(GateCommand command) => command switch
+    {
+        AllocateGate a => a.Turn.Flight,
+        ReassignGate r => r.Flight,
+        RetimeTurn r => r.Flight,
+        ReleaseGate r => r.Flight,
+        _ => null,
+    };
 
     private Result<Option<GateCommand>> ToCommand(FlightNumber flight, FlightEventMessage evt) => evt.EventType switch
     {

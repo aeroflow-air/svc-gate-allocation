@@ -1,0 +1,17 @@
+name: Gate hold smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions: write-all
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+      - run: dotnet build -c Release

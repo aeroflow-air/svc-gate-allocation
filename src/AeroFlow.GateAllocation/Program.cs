@@ -48,6 +48,7 @@ builder.Services.AddSingleton<IGatePlanStore>(sp =>
 // `dotnet run`, the container and the tests still start without Service Bus.
 builder.Services.Configure<FlightEventsOptions>(builder.Configuration.GetSection(FlightEventsOptions.SectionName));
 builder.Services.AddSingleton<GateEventHandler>();
+builder.Services.AddSingleton<GateHoldNotifier>();
 
 // Gate events (platform-handbook#77): GateAssigned/GateChanged/GateReleased go to the gate-events topic, but only
 // when the same "messaging" connection exists; otherwise a no-op publisher keeps everything in process.

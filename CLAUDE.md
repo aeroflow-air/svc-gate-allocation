@@ -29,8 +29,10 @@ The checklist is [C# coding standards](https://github.com/aeroflow-air/platform-
 ## Events
 
 - Subscribes to `flight-events` (owned by the flight simulator in aeroflow-local). Never publish to it.
-- Publishes only to its own topic, **`gate-events`**, through `IGateEventPublisher` (MessageId = event id, Subject = event type, CorrelationId = flight id).
-- Handlers must be **idempotent**: Service Bus can redeliver, so applying the same event twice must be safe. Unknown, late or out-of-order events return an `Ignored` / `Rejected` outcome with a reason; they are not thrown (that sends them to the dead-letter queue). Here a repeat allocation is rejected by the planner (`AlreadyAllocated`) and a repeat release finds no allocation, so neither changes the plan or publishes again; keep new commands the same.
+- Publishes only to its own topic, **`gate-events`**, through `IGateEventPublisher` (MessageId = event id, Subject = event type). CorrelationId is the flight id when there is one and falls back to the flight number; new events should always carry the flight id.
+- Handlers must be **idempotent**: Service Bus can redeliver, so applying the same event twice must not change the plan twice. Here a repeat allocation is rejected by the planner (`AlreadyAllocated`) and a repeat release finds no allocation; keep new commands the same.
+- Late or out-of-order events of a known type return an `Ignored` / `Rejected` outcome with a reason; don't throw for them. An **unknown `FlightEventType`** value is different: it fails JSON deserialisation and `FlightEventsProcessor` dead-letters it as `unreadable`. Adding an event type to `flight-events` therefore needs this service updated first.
+- **Known gap, don't copy it:** publishing is at most once. The plan is saved before the gate events are sent; if the send throws, the redelivered message is rejected as a repeat and the gate event is lost. Gate event ids are random (`Guid.NewGuid`), so consumers can't dedupe a re-publish either. The fix (outbox or deterministic ids) is tracked in [platform-handbook#84](https://github.com/aeroflow-air/platform-handbook/issues/84); new publishing code should follow that, not this pattern.
 
 ## Tests and docs
 

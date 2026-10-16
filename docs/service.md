@@ -134,7 +134,9 @@ Updates the in-memory gate plan. Logs `{Command} for {FlightNumber} after {Event
 | Bus unreachable | warning `Service Bus processor error`, repeating | no updates; the SDK retries | check the emulator in the Aspire dashboard |
 | Publish to `gate-events` fails | warning `Publishing gate events failed; N pending in the outbox, retrying in 5s` | events wait in the outbox, in order, and are re-sent after each `Outbox:RetrySeconds` back-off (new changes don't shorten it) until the bus accepts them; the plan is unaffected | check the emulator; a growing pending count means the bus is still down |
 | Send succeeded but reported failure (timeout) | same warning, then a second `Published ...` for that event | the event is sent twice with the same `MessageId`; duplicate detection on `gate-events` (turned on in the aeroflow-local AppHost, [aeroflow-local#11](https://github.com/aeroflow-air/aeroflow-local/pull/11); needs Standard tier in Azure) and consumer de-duplication by `eventId` drop the copy | none |
-| Process restart | plan back to the demo seed | live allocations and any unsent outbox events lost; consumers see a fresh sequence after restart | expected; storage is in memory. A durable store must keep the outbox in the same transaction as the plan (ADR-0017) |
+| Publish fails permanently (message too large, unauthorised, topic missing) | error `Permanent failure publishing gate events (Reason); N pending in the outbox are blocked behind it` | sending is strictly in order with no attempt limit, so this event and **everything behind it** stay queued and the in-memory outbox grows until it is fixed or the process restarts | fix the cause (usually the topic or permissions); poison handling and a size cap are tracked in [platform-handbook#108](https://github.com/aeroflow-air/platform-handbook/issues/108) |
+| Shutdown or deploy | warning `Stopping with N gate events still in the outbox` only if some couldn't be sent | the dispatcher stops after the message processor and makes one last drain within the shutdown timeout, so a routine deploy normally loses nothing | if the warning appears, the bus was down at shutdown |
+| Process restart | plan back to the demo seed | live allocations and any unsent outbox events lost; consumers see a fresh sequence after restart | expected; storage is in memory. A durable store must keep the outbox in the same transaction as the plan (ADR-0017). Edge case: a message applied but not completed before a crash is redelivered after the restart, and its `GateAssigned` gets the same id, possibly for a different gate, so duplicate detection or consumers may drop it. This goes away with durable state |
 
 Inbound delivery is at least once. The handler is idempotent by event id: the store remembers applied flight event ids in the same atomic update as the plan and outbox, so a redelivery (including an old `Delayed` arriving after a newer one) changes nothing and queues nothing, and the original change's events are already in the outbox. Domain rules (`already_allocated`) are a second line of defence. One message is processed at a time.
 
@@ -147,6 +149,7 @@ Inbound delivery is at least once. The handler is idempotent by event id: the st
 
 ## Known gaps
 
+- The outbox has no size limit and no poison handling (see failure modes; [platform-handbook#108](https://github.com/aeroflow-air/platform-handbook/issues/108)).
 - HTTP API mutations do not publish gate events (only the flight-events path does).
 - svc-flight-status still invents gate `TBA` at `Boarding`; it does not subscribe to `gate-events` yet.
 - Arrivals are ignored; every simulated aircraft is size C.

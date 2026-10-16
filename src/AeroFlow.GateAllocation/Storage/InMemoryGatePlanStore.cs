@@ -20,9 +20,9 @@ public sealed class InMemoryGatePlanStore(GatePlan seed) : IGatePlanStore
     public bool HasProcessed(Guid sourceEventId) => Volatile.Read(ref _state).Processed.Contains(sourceEventId);
 
     public Result<GatePlan> Update(Func<GatePlan, Result<GatePlan>> transition) =>
-        Swap(transition, static (_, _) => [], Option.None<Guid>()).Map(r => r.Plan);
+        Swap(transition, static (_, _) => [], Option.None<Guid>()).Map(r => r.Match(c => c.Plan, Current));
 
-    public Result<(GatePlan Plan, IReadOnlyList<GateEvent> Events)> Update(
+    public Result<Option<(GatePlan Plan, IReadOnlyList<GateEvent> Events)>> Update(
         Guid sourceEventId,
         Func<GatePlan, Result<GatePlan>> transition,
         Func<GatePlan, GatePlan, IReadOnlyList<GateEvent>> emit) =>
@@ -30,20 +30,24 @@ public sealed class InMemoryGatePlanStore(GatePlan seed) : IGatePlanStore
 
     public IReadOnlyList<GateEvent> Pending() => Volatile.Read(ref _state).Outbox;
 
-    public void MarkPublished(GateEvent sent)
+    public bool MarkPublished(GateEvent sent)
     {
         while (true)
         {
             var snapshot = Volatile.Read(ref _state);
-            if (snapshot.Outbox.IsEmpty || !ReferenceEquals(snapshot.Outbox[0], sent)
-                || ReferenceEquals(Interlocked.CompareExchange(ref _state, snapshot with { Outbox = snapshot.Outbox.RemoveAt(0) }, snapshot), snapshot))
+            if (snapshot.Outbox.IsEmpty || !ReferenceEquals(snapshot.Outbox[0], sent))
             {
-                return;
+                return false;
+            }
+
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _state, snapshot with { Outbox = snapshot.Outbox.RemoveAt(0) }, snapshot), snapshot))
+            {
+                return true;
             }
         }
     }
 
-    private Result<(GatePlan Plan, IReadOnlyList<GateEvent> Events)> Swap(
+    private Result<Option<(GatePlan Plan, IReadOnlyList<GateEvent> Events)>> Swap(
         Func<GatePlan, Result<GatePlan>> transition,
         Func<GatePlan, GatePlan, IReadOnlyList<GateEvent>> emit,
         Option<Guid> source)
@@ -53,7 +57,7 @@ public sealed class InMemoryGatePlanStore(GatePlan seed) : IGatePlanStore
             var snapshot = Volatile.Read(ref _state);
             if (source is Option<Guid>.Some seen && snapshot.Processed.Contains(seen.Value))
             {
-                return (snapshot.Plan, (IReadOnlyList<GateEvent>)[]);
+                return Option.None<(GatePlan, IReadOnlyList<GateEvent>)>();
             }
 
             var outcome = transition(snapshot.Plan);
@@ -72,7 +76,7 @@ public sealed class InMemoryGatePlanStore(GatePlan seed) : IGatePlanStore
 
             if (ReferenceEquals(Interlocked.CompareExchange(ref _state, next, snapshot), snapshot))
             {
-                return (plan, events);
+                return Option.Some<(GatePlan, IReadOnlyList<GateEvent>)>((plan, events));
             }
         }
     }

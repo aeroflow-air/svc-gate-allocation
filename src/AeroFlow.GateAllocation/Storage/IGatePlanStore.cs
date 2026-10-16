@@ -17,9 +17,10 @@ public interface IGatePlanStore
     /// As <see cref="Update(Func{GatePlan, Result{GatePlan}})"/>, for a change caused by the event
     /// <paramref name="sourceEventId"/>. In the same atomic step it adds the events <paramref name="emit"/> works out
     /// from the old and new plan to the outbox and remembers the source id. If that id was already applied, nothing
-    /// changes and no events are queued (idempotent redelivery). Both functions must be pure.
+    /// changes and the result is <c>Ok(None)</c> (idempotent redelivery), so callers can report it as ignored.
+    /// Both functions must be pure.
     /// </summary>
-    Result<(GatePlan Plan, IReadOnlyList<GateEvent> Events)> Update(
+    Result<Option<(GatePlan Plan, IReadOnlyList<GateEvent> Events)>> Update(
         Guid sourceEventId,
         Func<GatePlan, Result<GatePlan>> transition,
         Func<GatePlan, GatePlan, IReadOnlyList<GateEvent>> emit);
@@ -32,7 +33,7 @@ public interface IGatePlanStore
 
     /// <summary>
     /// Removes <paramref name="sent"/> from the head of the outbox once it is published. Only that exact entry is
-    /// removed, so another pending event can never be dropped by mistake. Does nothing if it is not the head.
+    /// removed, so another pending event can never be dropped by mistake. Returns false, changing nothing, if it is not the head.
     /// </summary>
-    void MarkPublished(GateEvent sent);
+    bool MarkPublished(GateEvent sent);
 }

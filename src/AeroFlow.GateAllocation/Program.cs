@@ -52,6 +52,11 @@ builder.Services.AddSingleton<GateEventHandler>();
 // Gate events (platform-handbook#77): GateAssigned/GateChanged/GateReleased go to the gate-events topic, but only
 // when the same "messaging" connection exists; otherwise a no-op publisher keeps everything in process.
 builder.Services.Configure<GateEventsOptions>(builder.Configuration.GetSection(GateEventsOptions.SectionName));
+// Outbox (ADR-0017), registered before the processors so it stops after them and drains last: gate events are stored with the plan change and sent from here, so a failed send is retried.
+builder.Services.Configure<OutboxOptions>(builder.Configuration.GetSection(OutboxOptions.SectionName));
+builder.Services.AddSingleton<OutboxDispatcher>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<OutboxDispatcher>());
+
 if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString(FlightEventsOptions.ConnectionName)))
 {
     builder.AddAzureServiceBusClient(FlightEventsOptions.ConnectionName);
@@ -62,11 +67,6 @@ else
 {
     builder.Services.AddSingleton<IGateEventPublisher, NoOpGateEventPublisher>();
 }
-
-// Outbox (ADR-0017): gate events are stored with the plan change and sent from here, so a failed send is retried.
-builder.Services.Configure<OutboxOptions>(builder.Configuration.GetSection(OutboxOptions.SectionName));
-builder.Services.AddSingleton<OutboxDispatcher>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<OutboxDispatcher>());
 
 // ---------------------------------------------------------------------------
 // OpenTelemetry stub — enable when the squad wires an exporter (OTLP / App Insights).

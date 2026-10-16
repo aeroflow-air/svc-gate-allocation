@@ -81,9 +81,11 @@ public sealed class GateEventHandler(IGatePlanStore store, IOptions<FlightEvents
                 ? GateEvents.Diff(before, after, flight, evt.FlightId, at, evt.EventId)
                 : []);
 
-        gateEvents = result.Match(r => r.Events, _ => []);
+        gateEvents = result.Match(r => r.Match(c => c.Events, () => []), _ => []);
         return result.Match<HandleOutcome>(
-            _ => new HandleOutcome.Applied(command.Name),
+            r => r.Match<HandleOutcome>(
+                _ => new HandleOutcome.Applied(command.Name),
+                () => new HandleOutcome.Ignored($"event {evt.EventId} already applied")),
             error => new HandleOutcome.Rejected(error));
     }
 

@@ -96,10 +96,10 @@ public sealed class OutboxTests
         _handler.Handle(Event(FlightEventType.Scheduled));
         var head = _store.Pending()[0];
 
-        _store.MarkPublished(head with { }); // same id and values, but not the stored entry
+        Assert.False(_store.MarkPublished(head with { })); // same id and values, but not the stored entry
 
         Assert.Single(_store.Pending());
-        _store.MarkPublished(head);
+        Assert.True(_store.MarkPublished(head));
         Assert.Empty(_store.Pending());
     }
 
@@ -122,6 +122,50 @@ public sealed class OutboxTests
         Assert.Equal(3, _publisher.Sent.Select(e => e.EventId).Distinct().Count());
         Assert.Equal(Departure.AddMinutes(60), _publisher.Sent[^1].OffBlock);
         Assert.Equal(Departure.AddMinutes(60), _store.Current().Allocations.Values.Single().Turn.Window.End);
+    }
+
+    [Fact]
+    public void Store_update_for_an_applied_source_id_is_none_and_queues_nothing()
+    {
+        var source = Guid.NewGuid();
+        var plan = _store.Current();
+        IReadOnlyList<GateEvent> Emit(GatePlan a, GatePlan b) => [new GateEvent(Guid.NewGuid(), GateEventType.GateAssigned, "BA1", "SIM-1", "1", Now)];
+
+        var first = _store.Update(source, p => p, Emit);
+        var second = _store.Update(source, p => p, Emit);
+
+        Assert.IsType<Option<(GatePlan, IReadOnlyList<GateEvent>)>.Some>(Assert.IsType<Result<Option<(GatePlan, IReadOnlyList<GateEvent>)>>.Ok>(first).Value);
+        Assert.IsType<Option<(GatePlan, IReadOnlyList<GateEvent>)>.None>(Assert.IsType<Result<Option<(GatePlan, IReadOnlyList<GateEvent>)>>.Ok>(second).Value);
+        Assert.Single(_store.Pending());
+        Assert.Same(plan, _store.Current());
+    }
+
+    [Fact]
+    public void Processed_ids_are_bounded_and_the_oldest_is_forgotten()
+    {
+        var oldest = Guid.NewGuid();
+        _store.Update(oldest, p => p, (_, _) => []);
+        for (var i = 0; i < InMemoryGatePlanStore.ProcessedMemory; i++)
+        {
+            _store.Update(Guid.NewGuid(), p => p, (_, _) => []);
+        }
+
+        Assert.False(_store.HasProcessed(oldest));
+    }
+
+    [Fact]
+    public async Task Stopping_the_dispatcher_drains_what_is_pending()
+    {
+        await _dispatcher.StartAsync(CancellationToken.None);
+        _publisher.FailNext = true; // the first attempt fails, the loop backs off
+        _handler.Handle(Event(FlightEventType.Scheduled));
+        _dispatcher.Notify();
+        await WaitUntil(() => _publisher.Attempts >= 1);
+
+        await _dispatcher.StopAsync(CancellationToken.None);
+
+        Assert.Empty(_store.Pending());
+        Assert.Single(_publisher.Sent);
     }
 
     [Fact]

@@ -15,13 +15,14 @@ public enum GateEventType
 
 /// <summary>
 /// Wire contract for a gate event (JSON body of a Service Bus message). <c>Subject</c> carries the event type and
-/// <c>CorrelationId</c> the flight id from the flight event that caused it (falling back to the flight number).
+/// <c>CorrelationId</c> the flight id from the flight event that caused it. <c>EventId</c> is derived from that flight
+/// event's id and the gate event type (<see cref="EventIds"/>), so a re-publish has the same id.
 /// </summary>
 public sealed record GateEvent(
     Guid EventId,
     GateEventType EventType,
     string FlightNumber,
-    string? FlightId,
+    string FlightId,
     string Gate,
     DateTimeOffset OccurredAt,
     string? PreviousGate = null,
@@ -38,7 +39,7 @@ public sealed record GateEvent(
 public static class GateEvents
 {
     public static ImmutableList<GateEvent> Diff(
-        GatePlan before, GatePlan after, FlightNumber flight, string? flightId, DateTimeOffset at, Func<Guid> newId)
+        GatePlan before, GatePlan after, FlightNumber flight, string flightId, DateTimeOffset at, Guid sourceEventId)
     {
         var was = before.AllocationFor(flight);
         var now = after.AllocationFor(flight);
@@ -55,6 +56,6 @@ public static class GateEvents
         };
 
         GateEvent Make(GateEventType type, Allocation a, string? previous) =>
-            new(newId(), type, flight.Value, flightId, a.Gate.Value, at, previous, a.Turn.Window.Start, a.Turn.Window.End);
+            new(EventIds.Derive(sourceEventId, type.ToString()), type, flight.Value, flightId, a.Gate.Value, at, previous, a.Turn.Window.Start, a.Turn.Window.End);
     }
 }

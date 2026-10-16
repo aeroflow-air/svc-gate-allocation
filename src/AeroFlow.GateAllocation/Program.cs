@@ -63,6 +63,11 @@ else
     builder.Services.AddSingleton<IGateEventPublisher, NoOpGateEventPublisher>();
 }
 
+// Outbox (ADR-0017): gate events are stored with the plan change and sent from here, so a failed send is retried.
+builder.Services.Configure<OutboxOptions>(builder.Configuration.GetSection(OutboxOptions.SectionName));
+builder.Services.AddSingleton<OutboxDispatcher>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<OutboxDispatcher>());
+
 // ---------------------------------------------------------------------------
 // OpenTelemetry stub — enable when the squad wires an exporter (OTLP / App Insights).
 // Keep this commented until you have somewhere to send traces/metrics; no dead deps.

@@ -79,7 +79,7 @@ public sealed class GateEventPublishingTests
         var after = GatePlanner.Apply(before, new ReassignGate(flight, GateId.Parse("2").Match(g => g, e => throw new InvalidOperationException())))
             .Match(p => p, e => throw new InvalidOperationException(e.Message));
 
-        var evt = Assert.Single(GateEvents.Diff(before, after, flight, "SIM-00001", Now, Guid.NewGuid));
+        var evt = Assert.Single(GateEvents.Diff(before, after, flight, "SIM-00001", Now, Guid.NewGuid()));
 
         Assert.Equal((GateEventType.GateChanged, "2", "1"), (evt.EventType, evt.Gate, evt.PreviousGate));
     }
@@ -99,11 +99,28 @@ public sealed class GateEventPublishingTests
     }
 
     [Fact]
-    public void Correlation_falls_back_to_flight_number()
+    public void Event_id_is_derived_from_the_flight_event_and_type()
     {
-        var evt = new GateEvent(Guid.NewGuid(), GateEventType.GateReleased, "BA123", null, "12", Now);
+        var scheduled = Event(FlightEventType.Scheduled);
 
-        Assert.Equal("BA123", ServiceBusGateEventPublisher.ToMessage(evt).CorrelationId);
+        _handler.Handle(scheduled, out var events);
+
+        var evt = Assert.Single(events);
+        Assert.Equal(EventIds.Derive(scheduled.EventId, nameof(GateEventType.GateAssigned)), evt.EventId);
+        Assert.NotEqual(scheduled.EventId, evt.EventId);
+    }
+
+    [Fact]
+    public void Derived_ids_are_stable_and_distinct_per_name()
+    {
+        var source = Guid.Parse("6f9619ff-8b86-d011-b42d-00c04fc964ff");
+
+        var a = EventIds.Derive(source, "GateAssigned");
+
+        Assert.Equal(a, EventIds.Derive(source, "GateAssigned"));
+        Assert.NotEqual(a, EventIds.Derive(source, "GateReleased"));
+        Assert.NotEqual(a, EventIds.Derive(Guid.NewGuid(), "GateAssigned"));
+        Assert.Equal('5', a.ToString()[14]); // RFC 9562 version 5
     }
 
     private static FlightEventMessage Event(FlightEventType type) =>

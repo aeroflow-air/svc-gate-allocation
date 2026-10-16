@@ -49,18 +49,20 @@ public sealed class GateEventHandler(IGatePlanStore store, IOptions<FlightEvents
         };
     }
 
+    /// <summary>
+    /// Applies the command and, in the same atomic store update, queues the gate events it produced in the outbox
+    /// (ADR-0017). The <see cref="OutboxDispatcher"/> sends them, so a failed send is retried rather than lost.
+    /// </summary>
     private HandleOutcome Apply(GateCommand command, FlightEventMessage evt, out IReadOnlyList<GateEvent> gateEvents)
     {
-        GatePlan? before = null;
-        var result = store.Update(plan =>
-        {
-            before = plan;
-            return GatePlanner.Apply(plan, command);
-        });
+        var at = _clock.GetUtcNow();
+        var result = store.Update(
+            plan => GatePlanner.Apply(plan, command),
+            (before, after) => FlightOf(command) is { } flight
+                ? GateEvents.Diff(before, after, flight, evt.FlightId, at, evt.EventId)
+                : []);
 
-        gateEvents = result is Result<GatePlan>.Ok ok && before is not null && FlightOf(command) is { } flight
-            ? GateEvents.Diff(before, ok.Value, flight, evt.FlightId, _clock.GetUtcNow(), Guid.NewGuid)
-            : [];
+        gateEvents = result.Match(r => r.Events, _ => []);
         return result.Match<HandleOutcome>(
             _ => new HandleOutcome.Applied(command.Name),
             error => new HandleOutcome.Rejected(error));

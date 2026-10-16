@@ -14,4 +14,10 @@ public sealed class MessagingWiringTests(WebApplicationFactory<Program> factory)
         Assert.IsType<NoOpGateEventPublisher>(factory.Services.GetRequiredService<IGateEventPublisher>());
         Assert.DoesNotContain(factory.Services.GetServices<IHostedService>(), h => h is FlightEventsProcessor);
     }
+
+    [Fact]
+    public void Outbox_dispatcher_always_runs_so_the_outbox_drains()
+    {
+        Assert.Contains(factory.Services.GetServices<IHostedService>(), h => h is OutboxDispatcher);
+    }
 }

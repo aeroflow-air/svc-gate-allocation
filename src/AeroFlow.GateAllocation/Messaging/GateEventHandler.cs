@@ -52,6 +52,12 @@ public sealed class GateEventHandler(IGatePlanStore store, IOptions<FlightEvents
             return new HandleOutcome.Rejected(new MissingEventIdentity("flightId"));
         }
 
+        // Idempotent by event id: a redelivered event (even after newer ones, e.g. an old Delayed) changes nothing.
+        if (store.HasProcessed(evt.EventId))
+        {
+            return new HandleOutcome.Ignored($"event {evt.EventId} already applied");
+        }
+
         var command = FlightNumber.Parse(evt.FlightNumber).Bind(flight => ToCommand(flight, evt));
         return command switch
         {
@@ -69,6 +75,7 @@ public sealed class GateEventHandler(IGatePlanStore store, IOptions<FlightEvents
     {
         var at = _clock.GetUtcNow();
         var result = store.Update(
+            evt.EventId,
             plan => GatePlanner.Apply(plan, command),
             (before, after) => FlightOf(command) is { } flight
                 ? GateEvents.Diff(before, after, flight, evt.FlightId, at, evt.EventId)

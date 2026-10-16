@@ -14,17 +14,25 @@ public interface IGatePlanStore
     Result<GatePlan> Update(Func<GatePlan, Result<GatePlan>> transition);
 
     /// <summary>
-    /// As <see cref="Update(Func{GatePlan, Result{GatePlan}})"/>, and in the same atomic step adds the events
-    /// <paramref name="emit"/> works out from the old and new plan to the outbox. Both functions must be pure.
-    /// Returns the new plan and the events that were queued.
+    /// As <see cref="Update(Func{GatePlan, Result{GatePlan}})"/>, for a change caused by the event
+    /// <paramref name="sourceEventId"/>. In the same atomic step it adds the events <paramref name="emit"/> works out
+    /// from the old and new plan to the outbox and remembers the source id. If that id was already applied, nothing
+    /// changes and no events are queued (idempotent redelivery). Both functions must be pure.
     /// </summary>
     Result<(GatePlan Plan, IReadOnlyList<GateEvent> Events)> Update(
+        Guid sourceEventId,
         Func<GatePlan, Result<GatePlan>> transition,
         Func<GatePlan, GatePlan, IReadOnlyList<GateEvent>> emit);
+
+    /// <summary>Whether a change caused by <paramref name="sourceEventId"/> was already applied (bounded memory).</summary>
+    bool HasProcessed(Guid sourceEventId);
 
     /// <summary>Gate events stored but not yet published, oldest first.</summary>
     IReadOnlyList<GateEvent> Pending();
 
-    /// <summary>Removes a published event from the outbox. Unknown ids are ignored.</summary>
-    void MarkPublished(Guid eventId);
+    /// <summary>
+    /// Removes <paramref name="sent"/> from the head of the outbox once it is published. Only that exact entry is
+    /// removed, so another pending event can never be dropped by mistake. Does nothing if it is not the head.
+    /// </summary>
+    void MarkPublished(GateEvent sent);
 }

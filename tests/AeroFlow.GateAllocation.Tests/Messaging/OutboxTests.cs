@@ -91,13 +91,46 @@ public sealed class OutboxTests
     }
 
     [Fact]
-    public void Mark_published_ignores_unknown_ids()
+    public void Mark_published_removes_only_the_exact_head_entry()
     {
         _handler.Handle(Event(FlightEventType.Scheduled));
+        var head = _store.Pending()[0];
 
-        _store.MarkPublished(Guid.NewGuid());
+        _store.MarkPublished(head with { }); // same id and values, but not the stored entry
 
         Assert.Single(_store.Pending());
+        _store.MarkPublished(head);
+        Assert.Empty(_store.Pending());
+    }
+
+    [Fact]
+    public async Task Old_delay_redelivered_after_a_newer_one_is_ignored_and_nothing_is_lost()
+    {
+        _handler.Handle(Event(FlightEventType.Scheduled));
+        var first = Event(FlightEventType.Delayed) with { DelayMinutes = 30 };
+        var second = Event(FlightEventType.Delayed) with { DelayMinutes = 60 };
+        _handler.Handle(first);
+        _handler.Handle(second);
+
+        // A-B-A: the first Delayed is redelivered (lock lost before Complete) while the bus is down.
+        Assert.IsType<HandleOutcome.Ignored>(_handler.Handle(first));
+
+        await _dispatcher.DrainAsync(CancellationToken.None);
+        Assert.Equal(
+            [GateEventType.GateAssigned, GateEventType.GateChanged, GateEventType.GateChanged],
+            _publisher.Sent.Select(e => e.EventType));
+        Assert.Equal(3, _publisher.Sent.Select(e => e.EventId).Distinct().Count());
+        Assert.Equal(Departure.AddMinutes(60), _publisher.Sent[^1].OffBlock);
+        Assert.Equal(Departure.AddMinutes(60), _store.Current().Allocations.Values.Single().Turn.Window.End);
+    }
+
+    [Fact]
+    public void Derive_matches_the_rfc_uuid_v5_test_vector()
+    {
+        // uuid5(NAMESPACE_DNS, "www.example.com") from RFC 9562 / Python's uuid module: pins ids across versions.
+        var dns = Guid.Parse("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+
+        Assert.Equal(Guid.Parse("2ed6657d-e927-568b-95e1-2665a8aea6a2"), EventIds.Derive(dns, "www.example.com"));
     }
 
     [Theory]
@@ -129,8 +162,7 @@ public sealed class OutboxTests
         await Task.Delay(50);
         Assert.Equal(1, _publisher.Attempts);
 
-        clock.Advance(TimeSpan.FromSeconds(5));
-        await WaitUntil(() => _store.Pending().Count == 0);
+        await AdvanceUntil(clock, () => _store.Pending().Count == 0);
         Assert.Single(_publisher.Sent);
 
         // A publisher timeout that isn't a shutdown must not stop the dispatcher.
@@ -138,12 +170,22 @@ public sealed class OutboxTests
         _handler.Handle(Event(FlightEventType.Departed));
         dispatcher.Notify();
         await WaitUntil(() => _publisher.Attempts == 3);
-        await Task.Delay(50); // let the back-off timer start before moving the clock
-        clock.Advance(TimeSpan.FromSeconds(5));
-        await WaitUntil(() => _store.Pending().Count == 0);
+        await AdvanceUntil(clock, () => _store.Pending().Count == 0);
         Assert.Equal(2, _publisher.Sent.Count);
 
         await dispatcher.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>Moves the fake clock in retry-sized steps until the condition holds, so no timer registration race.</summary>
+    private static async Task AdvanceUntil(FakeTimeProvider clock, Func<bool> condition)
+    {
+        for (var i = 0; i < 200 && !condition(); i++)
+        {
+            clock.Advance(TimeSpan.FromSeconds(5));
+            await Task.Delay(10);
+        }
+
+        Assert.True(condition());
     }
 
     private static async Task WaitUntil(Func<bool> condition)

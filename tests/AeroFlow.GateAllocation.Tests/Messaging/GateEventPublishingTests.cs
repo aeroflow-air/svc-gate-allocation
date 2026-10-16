@@ -123,6 +123,18 @@ public sealed class GateEventPublishingTests
         Assert.Equal('5', a.ToString()[14]); // RFC 9562 version 5
     }
 
+    [Fact]
+    public void Derived_ids_are_pinned_so_renames_cannot_change_them()
+    {
+        // Ids derive from the type name; renaming a GateEventType member would change ids across a deploy.
+        var source = Guid.Parse("6f9619ff-8b86-d011-b42d-00c04fc964ff");
+
+        Assert.Equal(["GateAssigned", "GateChanged", "GateReleased"], Enum.GetNames<GateEventType>());
+        _handler.Handle(Event(FlightEventType.Scheduled) with { EventId = source }, out var events);
+
+        Assert.Equal(Guid.Parse("562baf3b-0b9f-550b-9e3d-71d75580bfa4"), Assert.Single(events).EventId);
+    }
+
     private static FlightEventMessage Event(FlightEventType type) =>
         new(Guid.NewGuid(), "SIM-00001", "BA123", type, "LHR", "AMS", Departure, Departure.AddHours(-1));
 

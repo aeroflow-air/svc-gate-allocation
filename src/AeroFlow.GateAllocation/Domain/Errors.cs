@@ -20,6 +20,10 @@ public abstract record RuleViolation(string Code, string Message) : Error(Code, 
 public sealed record InvalidFlightNumber(string? Value)
     : ValidationError("invalid_flight_number", $"'{Value}' is not a valid flight number (e.g. AF204).");
 
+/// <summary>A flight event without an event id or flight id: gate event ids and correlation depend on both (ADR-0017).</summary>
+public sealed record MissingEventIdentity(string Field)
+    : ValidationError("missing_event_identity", $"The flight event has no {Field}.");
+
 public sealed record InvalidGateId(string? Value)
     : ValidationError("invalid_gate", $"'{Value}' is not a valid gate (expected 1-4 letters or digits).");
 

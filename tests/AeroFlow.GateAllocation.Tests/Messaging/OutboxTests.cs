@@ -1,0 +1,331 @@
+using AeroFlow.GateAllocation.Domain;
+using AeroFlow.GateAllocation.Messaging;
+using AeroFlow.GateAllocation.Storage;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
+using Xunit;
+
+namespace AeroFlow.GateAllocation.Tests.Messaging;
+
+/// <summary>ADR-0017: gate events survive a failed publish and are sent once the bus is back.</summary>
+public sealed class OutboxTests
+{
+    private static readonly DateTimeOffset Departure = new(2026, 10, 12, 18, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset Now = Departure.AddHours(-2);
+
+    private readonly InMemoryGatePlanStore _store;
+    private readonly GateEventHandler _handler;
+    private readonly FlakyPublisher _publisher = new();
+    private readonly OutboxDispatcher _dispatcher;
+
+    public OutboxTests()
+    {
+        var plan = GatePlan.Create(
+            [new Gate(GateId.Parse("1").Match(g => g, e => throw new InvalidOperationException()), AircraftSize.C, new GateStatus.Open())],
+            TimeSpan.FromMinutes(15)).Match(p => p, e => throw new InvalidOperationException(e.Message));
+        _store = new InMemoryGatePlanStore(plan);
+        var clock = new FakeTimeProvider(Now);
+        _handler = new GateEventHandler(_store, Options.Create(new FlightEventsOptions()), clock);
+        _dispatcher = new OutboxDispatcher(_store, _publisher, Options.Create(new OutboxOptions()), clock, NullLogger<OutboxDispatcher>.Instance);
+    }
+
+    [Fact]
+    public void Applied_change_queues_its_events_in_the_outbox()
+    {
+        _handler.Handle(Event(FlightEventType.Scheduled), out var events);
+
+        Assert.Equal(events, _store.Pending());
+    }
+
+    [Fact]
+    public async Task Drain_sends_and_clears_the_outbox()
+    {
+        _handler.Handle(Event(FlightEventType.Scheduled));
+
+        Assert.Equal(1, await _dispatcher.DrainAsync(CancellationToken.None));
+
+        Assert.Empty(_store.Pending());
+        Assert.Equal(GateEventType.GateAssigned, Assert.Single(_publisher.Sent).EventType);
+    }
+
+    [Fact]
+    public async Task Failed_publish_keeps_the_event_and_a_retry_sends_it()
+    {
+        _handler.Handle(Event(FlightEventType.Scheduled));
+        _publisher.FailNext = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _dispatcher.DrainAsync(CancellationToken.None));
+        var pending = Assert.Single(_store.Pending());
+
+        // The redelivered flight event is a repeat (AlreadyAllocated) and queues nothing new...
+        Assert.IsType<HandleOutcome.Rejected>(_handler.Handle(Event(FlightEventType.Scheduled)));
+        Assert.Single(_store.Pending());
+
+        // ...but the retry still sends the original event, with its original id.
+        await _dispatcher.DrainAsync(CancellationToken.None);
+        Assert.Equal(pending.EventId, Assert.Single(_publisher.Sent).EventId);
+        Assert.Empty(_store.Pending());
+    }
+
+    [Fact]
+    public async Task Events_are_sent_in_order_and_a_failure_holds_back_later_ones()
+    {
+        _handler.Handle(Event(FlightEventType.Scheduled));
+        _handler.Handle(Event(FlightEventType.Departed));
+        _publisher.FailNext = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _dispatcher.DrainAsync(CancellationToken.None));
+        Assert.Equal(2, _store.Pending().Count);
+
+        await _dispatcher.DrainAsync(CancellationToken.None);
+        Assert.Equal([GateEventType.GateAssigned, GateEventType.GateReleased], _publisher.Sent.Select(e => e.EventType));
+    }
+
+    [Fact]
+    public void Rejected_change_queues_nothing()
+    {
+        _handler.Handle(Event(FlightEventType.Departed));
+
+        Assert.Empty(_store.Pending());
+    }
+
+    [Fact]
+    public void Mark_published_removes_only_the_exact_head_entry()
+    {
+        _handler.Handle(Event(FlightEventType.Scheduled));
+        var head = _store.Pending()[0];
+
+        Assert.False(_store.MarkPublished(head with { })); // same id and values, but not the stored entry
+
+        Assert.Single(_store.Pending());
+        Assert.True(_store.MarkPublished(head));
+        Assert.Empty(_store.Pending());
+    }
+
+    [Fact]
+    public async Task Old_delay_redelivered_after_a_newer_one_is_ignored_and_nothing_is_lost()
+    {
+        _handler.Handle(Event(FlightEventType.Scheduled));
+        var first = Event(FlightEventType.Delayed) with { DelayMinutes = 30 };
+        var second = Event(FlightEventType.Delayed) with { DelayMinutes = 60 };
+        _handler.Handle(first);
+        _handler.Handle(second);
+
+        // A-B-A: the first Delayed is redelivered (lock lost before Complete) while the bus is down.
+        Assert.IsType<HandleOutcome.Ignored>(_handler.Handle(first));
+
+        await _dispatcher.DrainAsync(CancellationToken.None);
+        Assert.Equal(
+            [GateEventType.GateAssigned, GateEventType.GateChanged, GateEventType.GateChanged],
+            _publisher.Sent.Select(e => e.EventType));
+        Assert.Equal(3, _publisher.Sent.Select(e => e.EventId).Distinct().Count());
+        Assert.Equal(Departure.AddMinutes(60), _publisher.Sent[^1].OffBlock);
+        Assert.Equal(Departure.AddMinutes(60), _store.Current().Allocations.Values.Single().Turn.Window.End);
+    }
+
+    [Fact]
+    public void Store_update_for_an_applied_source_id_is_none_and_queues_nothing()
+    {
+        var source = Guid.NewGuid();
+        var plan = _store.Current();
+        IReadOnlyList<GateEvent> Emit(GatePlan a, GatePlan b) => [new GateEvent(Guid.NewGuid(), GateEventType.GateAssigned, "BA1", "SIM-1", "1", Now)];
+
+        var first = _store.Update(source, p => p, Emit);
+        var second = _store.Update(source, p => p, Emit);
+
+        Assert.IsType<Option<(GatePlan, IReadOnlyList<GateEvent>)>.Some>(Assert.IsType<Result<Option<(GatePlan, IReadOnlyList<GateEvent>)>>.Ok>(first).Value);
+        Assert.IsType<Option<(GatePlan, IReadOnlyList<GateEvent>)>.None>(Assert.IsType<Result<Option<(GatePlan, IReadOnlyList<GateEvent>)>>.Ok>(second).Value);
+        Assert.Single(_store.Pending());
+        Assert.Same(plan, _store.Current());
+    }
+
+    [Fact]
+    public void Processed_ids_are_bounded_and_the_oldest_is_forgotten()
+    {
+        var oldest = Guid.NewGuid();
+        _store.Update(oldest, p => p, (_, _) => []);
+        for (var i = 0; i < InMemoryGatePlanStore.ProcessedMemory; i++)
+        {
+            _store.Update(Guid.NewGuid(), p => p, (_, _) => []);
+        }
+
+        Assert.False(_store.HasProcessed(oldest));
+    }
+
+    [Fact]
+    public async Task Stopping_the_dispatcher_drains_what_is_pending()
+    {
+        await _dispatcher.StartAsync(CancellationToken.None);
+        _publisher.FailNext = true; // the first attempt fails, the loop backs off
+        _handler.Handle(Event(FlightEventType.Scheduled));
+        _dispatcher.Notify();
+        await WaitUntil(() => _publisher.Attempts >= 1);
+
+        await _dispatcher.StopAsync(CancellationToken.None);
+
+        Assert.Empty(_store.Pending());
+        Assert.Single(_publisher.Sent);
+    }
+
+    [Fact]
+    public async Task Redelivered_message_is_ignored_by_id_while_its_event_is_still_pending()
+    {
+        var scheduled = Event(FlightEventType.Scheduled);
+        _handler.Handle(scheduled);
+        _publisher.FailNext = true;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _dispatcher.DrainAsync(CancellationToken.None));
+
+        Assert.IsType<HandleOutcome.Ignored>(_handler.Handle(scheduled)); // same message: the id check, not AlreadyAllocated
+
+        Assert.Single(_store.Pending());
+        await _dispatcher.DrainAsync(CancellationToken.None);
+        Assert.Single(_publisher.Sent);
+    }
+
+    [Fact]
+    public async Task Drain_stops_when_another_drainer_already_acknowledged_the_head()
+    {
+        _handler.Handle(Event(FlightEventType.Scheduled));
+        _handler.Handle(Event(FlightEventType.Departed));
+        _publisher.BeforeSend = evt => _store.MarkPublished(evt); // someone else acks the head first
+
+        Assert.Equal(0, await _dispatcher.DrainAsync(CancellationToken.None));
+        Assert.Equal(1, _publisher.Attempts); // stopped instead of walking the stale snapshot
+    }
+
+    [Fact]
+    public void Derive_matches_the_rfc_uuid_v5_test_vector()
+    {
+        // uuid5(NAMESPACE_DNS, "www.example.com") from RFC 9562 / Python's uuid module: pins ids across versions.
+        var dns = Guid.Parse("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+
+        Assert.Equal(Guid.Parse("2ed6657d-e927-568b-95e1-2665a8aea6a2"), EventIds.Derive(dns, "www.example.com"));
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void Flight_event_without_identity_is_rejected_and_queues_nothing(bool emptyEventId, bool emptyFlightId)
+    {
+        var evt = Event(FlightEventType.Scheduled);
+        evt = evt with { EventId = emptyEventId ? Guid.Empty : evt.EventId, FlightId = emptyFlightId ? "" : evt.FlightId };
+
+        var outcome = Assert.IsType<HandleOutcome.Rejected>(_handler.Handle(evt));
+
+        Assert.Equal("missing_event_identity", outcome.Error.Code);
+        Assert.Empty(_store.Pending());
+    }
+
+    [Fact]
+    public async Task Running_dispatcher_backs_off_after_a_failure_then_sends()
+    {
+        var clock = new FakeTimeProvider(Now);
+        var dispatcher = new OutboxDispatcher(_store, _publisher, Options.Create(new OutboxOptions { RetrySeconds = 5 }), clock, NullLogger<OutboxDispatcher>.Instance);
+        _handler.Handle(Event(FlightEventType.Scheduled));
+        _publisher.FailNext = true;
+
+        await dispatcher.StartAsync(CancellationToken.None);
+        await WaitUntil(() => _publisher.Attempts == 1);
+
+        dispatcher.Notify(); // a wake-up during the back-off doesn't retry early
+        await Task.Delay(50);
+        Assert.Equal(1, _publisher.Attempts);
+
+        await AdvanceUntil(clock, () => _store.Pending().Count == 0);
+        Assert.Single(_publisher.Sent);
+
+        // A publisher timeout that isn't a shutdown must not stop the dispatcher.
+        _publisher.ThrowCancelled = true;
+        _handler.Handle(Event(FlightEventType.Departed));
+        dispatcher.Notify();
+        await WaitUntil(() => _publisher.Attempts == 3);
+        await AdvanceUntil(clock, () => _store.Pending().Count == 0);
+        Assert.Equal(2, _publisher.Sent.Count);
+
+        await dispatcher.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>Moves the fake clock in retry-sized steps until the condition holds, so no timer registration race.</summary>
+    private static async Task AdvanceUntil(FakeTimeProvider clock, Func<bool> condition)
+    {
+        for (var i = 0; i < 200 && !condition(); i++)
+        {
+            clock.Advance(TimeSpan.FromSeconds(5));
+            await Task.Delay(10);
+        }
+
+        Assert.True(condition());
+    }
+
+    private static async Task WaitUntil(Func<bool> condition)
+    {
+        for (var i = 0; i < 200 && !condition(); i++)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.True(condition());
+    }
+
+    private static FlightEventMessage Event(FlightEventType type) =>
+        new(Guid.NewGuid(), "SIM-00001", "BA123", type, "LHR", "AMS", Departure, Departure.AddHours(-1));
+
+    private sealed class FlakyPublisher : IGateEventPublisher
+    {
+        // Written on the dispatcher's thread and read by the test: everything goes through the lock.
+        private readonly object _gate = new();
+        private readonly List<GateEvent> _sent = [];
+        private bool _failNext;
+        private bool _throwCancelled;
+        private int _attempts;
+
+        public bool FailNext { set { lock (_gate) { _failNext = value; } } }
+
+        public bool ThrowCancelled { set { lock (_gate) { _throwCancelled = value; } } }
+
+        /// <summary>Runs before each send; lets a test act as a second drainer.</summary>
+        public Action<GateEvent>? BeforeSend { get; set; }
+
+        public int Attempts => Volatile.Read(ref _attempts);
+
+        public IReadOnlyList<GateEvent> Sent
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return [.. _sent];
+                }
+            }
+        }
+
+        public Task PublishAsync(IReadOnlyCollection<GateEvent> events, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _attempts);
+            foreach (var evt in events)
+            {
+                BeforeSend?.Invoke(evt);
+            }
+
+            lock (_gate)
+            {
+                if (_throwCancelled)
+                {
+                    _throwCancelled = false;
+                    throw new TaskCanceledException("send timed out");
+                }
+
+                if (_failNext)
+                {
+                    _failNext = false;
+                    throw new InvalidOperationException("bus down");
+                }
+
+                _sent.AddRange(events);
+            }
+
+            return Task.CompletedTask;
+        }
+    }
+}

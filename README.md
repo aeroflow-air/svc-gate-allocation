@@ -53,7 +53,7 @@ Settings (`FlightEvents` section): `Topic` (`flight-events`), `Subscription` (`g
 
 ## Gate events (published)
 
-Each gate change caused by a flight event is published to the Service Bus topic **`gate-events`** (owned by this service, ADR-0013). The JSON body is a [`GateEvent`](src/AeroFlow.GateAllocation/Domain/GateEvent.cs); `Subject` is the event type, `CorrelationId` the simulator's flight id (or the flight number if there is none) and `MessageId` the event id.
+Each gate change caused by a flight event is published to the Service Bus topic **`gate-events`** (owned by this service, ADR-0013). The JSON body is a [`GateEvent`](src/AeroFlow.GateAllocation/Domain/GateEvent.cs); `Subject` is the event type, `CorrelationId` the simulator's flight id and `MessageId` the event id. Events go through an outbox saved with the plan change, so a failed send is retried, and ids are deterministic (UUIDv5 of the flight event id and type), so consumers de-duplicate by `eventId` ([ADR-0017](https://github.com/aeroflow-air/platform-handbook/blob/main/docs/decisions/0017-reliable-event-publishing.md)).
 
 | Event | Caused by | Fields |
 |---|---|---|

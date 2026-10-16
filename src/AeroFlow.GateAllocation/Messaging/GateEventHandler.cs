@@ -40,6 +40,24 @@ public sealed class GateEventHandler(IGatePlanStore store, IOptions<FlightEvents
             return new HandleOutcome.Ignored($"not departing {_options.HomeAirport}");
         }
 
+        // Gate event ids are derived from the event id and correlated by the flight id, so both must be present:
+        // a missing eventId (Guid.Empty) would give every such flight the same MessageId.
+        if (evt.EventId == Guid.Empty)
+        {
+            return new HandleOutcome.Rejected(new MissingEventIdentity("eventId"));
+        }
+
+        if (string.IsNullOrWhiteSpace(evt.FlightId))
+        {
+            return new HandleOutcome.Rejected(new MissingEventIdentity("flightId"));
+        }
+
+        // Idempotent by event id: a redelivered event (even after newer ones, e.g. an old Delayed) changes nothing.
+        if (store.HasProcessed(evt.EventId))
+        {
+            return new HandleOutcome.Ignored($"event {evt.EventId} already applied");
+        }
+
         var command = FlightNumber.Parse(evt.FlightNumber).Bind(flight => ToCommand(flight, evt));
         return command switch
         {
@@ -49,20 +67,25 @@ public sealed class GateEventHandler(IGatePlanStore store, IOptions<FlightEvents
         };
     }
 
+    /// <summary>
+    /// Applies the command and, in the same atomic store update, queues the gate events it produced in the outbox
+    /// (ADR-0017). The <see cref="OutboxDispatcher"/> sends them, so a failed send is retried rather than lost.
+    /// </summary>
     private HandleOutcome Apply(GateCommand command, FlightEventMessage evt, out IReadOnlyList<GateEvent> gateEvents)
     {
-        GatePlan? before = null;
-        var result = store.Update(plan =>
-        {
-            before = plan;
-            return GatePlanner.Apply(plan, command);
-        });
+        var at = _clock.GetUtcNow();
+        var result = store.Update(
+            evt.EventId,
+            plan => GatePlanner.Apply(plan, command),
+            (before, after) => FlightOf(command) is { } flight
+                ? GateEvents.Diff(before, after, flight, evt.FlightId, at, evt.EventId)
+                : []);
 
-        gateEvents = result is Result<GatePlan>.Ok ok && before is not null && FlightOf(command) is { } flight
-            ? GateEvents.Diff(before, ok.Value, flight, evt.FlightId, _clock.GetUtcNow(), Guid.NewGuid)
-            : [];
+        gateEvents = result.Match(r => r.Match(c => c.Events, () => []), _ => []);
         return result.Match<HandleOutcome>(
-            _ => new HandleOutcome.Applied(command.Name),
+            r => r.Match<HandleOutcome>(
+                _ => new HandleOutcome.Applied(command.Name),
+                () => new HandleOutcome.Ignored($"event {evt.EventId} already applied")),
             error => new HandleOutcome.Rejected(error));
     }
 

@@ -40,13 +40,13 @@ flowchart LR
   API[GatesController<br/>AllocationsController] --> S
   H -->|GateCommand| S[(InMemoryGatePlanStore)]
   S -->|GatePlanner.Apply| D[Domain: GatePlan, Turn, TimeWindow]
-  H -->|GateEvents.Diff| PUB[Gate event publisher]
-  PUB -->|gate-events| GE[[topic: gate-events]]
+  S -->|outbox, same update| OB[OutboxDispatcher]
+  OB -->|gate-events| GE[[topic: gate-events]]
 ```
 
 - **Domain** (`src/AeroFlow.GateAllocation/Domain`): value types (`FlightNumber`, `GateId`, `TimeWindow`, `AircraftSize` C to F), `Gate`, `Turn`, `GatePlan`, the closed command set, and `GateEvent` / `GateEvents.Diff`.
 - **Storage**: one in-memory plan updated atomically; seeded by `DemoGatePlan` with gates `7`, `9`, `21`, `R1` (C), `12` (D), `14` (E), `55A` (F). `R1` is closed, so six are usable. Minimum turnaround 15 minutes.
-- **Messaging**: a hosted Service Bus processor (one message at a time, manual completion) hands each event to `GateEventHandler`, which turns it into a command and publishes any resulting gate events.
+- **Messaging**: a hosted Service Bus processor (one message at a time, manual completion) hands each event to `GateEventHandler`, which turns it into a command. The plan change and the gate events it produced (`GateEvents.Diff`) are saved in **one atomic store update** (plan plus outbox); `OutboxDispatcher` then sends the outbox in order and removes each event once sent ([ADR-0017](https://github.com/aeroflow-air/platform-handbook/blob/main/docs/decisions/0017-reliable-event-publishing.md)).
 - **API**: controllers over the same store. HTTP mutations do **not** publish gate events yet.
 
 ## Inputs
@@ -84,6 +84,7 @@ Contract: `Messaging/FlightEventMessage.cs`, a **local copy** of `AeroFlow.Local
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
+| `Outbox:RetrySeconds` | `5` | how often unsent gate events are retried when nothing else wakes the dispatcher |
 | `ConnectionStrings:messaging` | unset | Service Bus; when unset the processor and publisher do not start |
 | `FlightEvents:Topic` | `flight-events` | |
 | `FlightEvents:Subscription` | `gate-allocation` | set by the AppHost via `FlightEvents__Subscription` |
@@ -97,7 +98,7 @@ Contract: `Messaging/FlightEventMessage.cs`, a **local copy** of `AeroFlow.Local
 
 ### Events published
 
-Topic **`gate-events`** (owned by this service). JSON body is `Domain/GateEvent`; `Subject` = event type, `CorrelationId` = simulator flight id (or flight number), `MessageId` = event id.
+Topic **`gate-events`** (owned by this service). JSON body is `Domain/GateEvent`; `Subject` = event type, `CorrelationId` = simulator flight id (always set), `MessageId` = event id. The event id is deterministic: a UUIDv5 of the triggering flight event's id and the gate event type, so a re-send has the same `MessageId` and consumers de-duplicate by `eventId`. Delivery is **at least once** (ADR-0017).
 
 | Event | Caused by | Notable fields |
 | --- | --- | --- |
@@ -126,23 +127,29 @@ Updates the in-memory gate plan. Logs `{Command} for {FlightNumber} after {Event
 | --- | --- | --- | --- |
 | All six open gates busy | warning `Scheduled for XX123 rejected: no_gate_available` | that flight gets no gate; message completed; no gate event | expected under load; lower `Simulator__NewFlightProbability` or add gates |
 | Release or retime for a flight it never allocated | warning with `allocation_not_found` | none | expected after a restart |
-| Redelivered `Scheduled` | warning `already_allocated` | none; domain rule makes it safe | none |
+| Redelivered flight event (any type, even after newer ones) | debug `ignored: event ... already applied` | none; the last 10,000 applied event ids are remembered with the plan | none |
 | Unreadable or empty body | warning `Dead-lettered unreadable flight event`; message in the subscription's dead-letter queue | event lost to this service | contract copy has drifted from the simulator (#71); compare `FlightEventMessage` with `FlightEvent` |
+| Flight event without `eventId` or `flightId` | warning `rejected: missing_event_identity` | flight ignored; no gate event | contract copy drifted (#71) |
 | Invalid flight number | warning `invalid_flight_number` | flight ignored | simulator must send two-character airline + 1-4 digits |
 | Bus unreachable | warning `Service Bus processor error`, repeating | no updates; the SDK retries | check the emulator in the Aspire dashboard |
-| Process restart | plan back to the demo seed | live allocations lost; consumers see a fresh sequence after restart | expected; storage is in memory |
+| Publish to `gate-events` fails | warning `Publishing gate events failed; N pending in the outbox, retrying in 5s` | events wait in the outbox, in order, and are re-sent after each `Outbox:RetrySeconds` back-off (new changes don't shorten it) until the bus accepts them; the plan is unaffected | check the emulator; a growing pending count means the bus is still down |
+| Send succeeded but reported failure (timeout) | same warning, then a second `Published ...` for that event | the event is sent twice with the same `MessageId`; duplicate detection on `gate-events` (turned on in the aeroflow-local AppHost, [aeroflow-local#11](https://github.com/aeroflow-air/aeroflow-local/pull/11); needs Standard tier in Azure) and consumer de-duplication by `eventId` drop the copy | none |
+| Publish fails permanently (message too large, unauthorised, topic missing) | error `Permanent failure publishing gate events (Reason); N pending in the outbox are blocked behind it` | sending is strictly in order with no attempt limit, so this event and **everything behind it** stay queued and the in-memory outbox grows until it is fixed or the process restarts | fix the cause (usually the topic or permissions); poison handling and a size cap are tracked in [platform-handbook#108](https://github.com/aeroflow-air/platform-handbook/issues/108) |
+| Shutdown or deploy | warning `Final drain of gate events at shutdown failed`, then `Stopping with N gate events still in the outbox`, only if some couldn't be sent | the dispatcher stops after the message processor and makes one last drain within the shutdown timeout, so a routine deploy normally loses nothing | if the warning appears, the bus was down at shutdown |
+| Process restart | plan back to the demo seed | live allocations and any unsent outbox events lost; consumers see a fresh sequence after restart | expected; storage is in memory. A durable store must keep the outbox in the same transaction as the plan (ADR-0017). Edge case: a message applied but not completed before a crash is redelivered after the restart, and its `GateAssigned` gets the same id, possibly for a different gate, so duplicate detection or consumers may drop it. This goes away with durable state |
 
-Delivery is at least once and the handler is **not** idempotent by event id; it relies on domain rules to reject repeats. One message is processed at a time.
+Inbound delivery is at least once. The handler is idempotent by event id: the store remembers applied flight event ids in the same atomic update as the plan and outbox, so a redelivery (including an old `Delayed` arriving after a newer one) changes nothing and queues nothing, and the original change's events are already in the outbox. Domain rules (`already_allocated`) are a second line of defence. One message is processed at a time.
 
 ## Running and testing
 
 - Standalone: `dotnet run --project src/AeroFlow.GateAllocation`, then `curl http://localhost:8080/api/gates`; Scalar at `/scalar`.
 - With the airport: clone next to `aeroflow-local` and run its AppHost. Healthy logs: `Listening for flight events on flight-events/gate-allocation`, then `AllocateGate for BA1234 after Scheduled` and a matching `GateAssigned` on `gate-events`.
-- Tests: `dotnet test` covers the planner rules, value types, API (status codes and problem details), API docs, health, the event handler mapping and `GateEvents.Diff`.
+- Tests: `dotnet test` covers the planner rules, value types, API (status codes and problem details), API docs, health, the event handler mapping, `GateEvents.Diff`, deterministic event ids and the outbox (failed publish, retry, ordering).
 - Container: `docker build -t aeroflow-gate-allocation . && docker run --rm -p 8080:8080 aeroflow-gate-allocation`.
 
 ## Known gaps
 
+- The outbox has no size limit and no poison handling (see failure modes; [platform-handbook#108](https://github.com/aeroflow-air/platform-handbook/issues/108)).
 - HTTP API mutations do not publish gate events (only the flight-events path does).
 - svc-flight-status still invents gate `TBA` at `Boarding`; it does not subscribe to `gate-events` yet.
 - Arrivals are ignored; every simulated aircraft is size C.

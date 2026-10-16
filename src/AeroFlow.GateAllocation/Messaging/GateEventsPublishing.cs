@@ -38,7 +38,7 @@ public sealed partial class ServiceBusGateEventPublisher(
         {
             MessageId = evt.EventId.ToString(),
             Subject = evt.EventType.ToString(),
-            CorrelationId = evt.FlightId ?? evt.FlightNumber,
+            CorrelationId = evt.FlightId,
             ContentType = "application/json",
         };
 

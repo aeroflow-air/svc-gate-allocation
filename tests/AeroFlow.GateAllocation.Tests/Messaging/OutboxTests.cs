@@ -100,6 +100,62 @@ public sealed class OutboxTests
         Assert.Single(_store.Pending());
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void Flight_event_without_identity_is_rejected_and_queues_nothing(bool emptyEventId, bool emptyFlightId)
+    {
+        var evt = Event(FlightEventType.Scheduled);
+        evt = evt with { EventId = emptyEventId ? Guid.Empty : evt.EventId, FlightId = emptyFlightId ? "" : evt.FlightId };
+
+        var outcome = Assert.IsType<HandleOutcome.Rejected>(_handler.Handle(evt));
+
+        Assert.Equal("missing_event_identity", outcome.Error.Code);
+        Assert.Empty(_store.Pending());
+    }
+
+    [Fact]
+    public async Task Running_dispatcher_backs_off_after_a_failure_then_sends()
+    {
+        var clock = new FakeTimeProvider(Now);
+        var dispatcher = new OutboxDispatcher(_store, _publisher, Options.Create(new OutboxOptions { RetrySeconds = 5 }), clock, NullLogger<OutboxDispatcher>.Instance);
+        _handler.Handle(Event(FlightEventType.Scheduled));
+        _publisher.FailNext = true;
+
+        await dispatcher.StartAsync(CancellationToken.None);
+        await WaitUntil(() => _publisher.Attempts == 1);
+
+        dispatcher.Notify(); // a wake-up during the back-off doesn't retry early
+        await Task.Delay(50);
+        Assert.Equal(1, _publisher.Attempts);
+
+        clock.Advance(TimeSpan.FromSeconds(5));
+        await WaitUntil(() => _store.Pending().Count == 0);
+        Assert.Single(_publisher.Sent);
+
+        // A publisher timeout that isn't a shutdown must not stop the dispatcher.
+        _publisher.ThrowCancelled = true;
+        _handler.Handle(Event(FlightEventType.Departed));
+        dispatcher.Notify();
+        await WaitUntil(() => _publisher.Attempts == 3);
+        await Task.Delay(50); // let the back-off timer start before moving the clock
+        clock.Advance(TimeSpan.FromSeconds(5));
+        await WaitUntil(() => _store.Pending().Count == 0);
+        Assert.Equal(2, _publisher.Sent.Count);
+
+        await dispatcher.StopAsync(CancellationToken.None);
+    }
+
+    private static async Task WaitUntil(Func<bool> condition)
+    {
+        for (var i = 0; i < 200 && !condition(); i++)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.True(condition());
+    }
+
     private static FlightEventMessage Event(FlightEventType type) =>
         new(Guid.NewGuid(), "SIM-00001", "BA123", type, "LHR", "AMS", Departure, Departure.AddHours(-1));
 
@@ -107,10 +163,21 @@ public sealed class OutboxTests
     {
         public bool FailNext { get; set; }
 
+        public bool ThrowCancelled { get; set; }
+
+        public int Attempts { get; private set; }
+
         public List<GateEvent> Sent { get; } = [];
 
         public Task PublishAsync(IReadOnlyCollection<GateEvent> events, CancellationToken cancellationToken)
         {
+            Attempts++;
+            if (ThrowCancelled)
+            {
+                ThrowCancelled = false;
+                throw new TaskCanceledException("send timed out");
+            }
+
             if (FailNext)
             {
                 FailNext = false;

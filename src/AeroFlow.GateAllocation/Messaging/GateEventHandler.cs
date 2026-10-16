@@ -40,6 +40,18 @@ public sealed class GateEventHandler(IGatePlanStore store, IOptions<FlightEvents
             return new HandleOutcome.Ignored($"not departing {_options.HomeAirport}");
         }
 
+        // Gate event ids are derived from the event id and correlated by the flight id, so both must be present:
+        // a missing eventId (Guid.Empty) would give every such flight the same MessageId.
+        if (evt.EventId == Guid.Empty)
+        {
+            return new HandleOutcome.Rejected(new MissingEventIdentity("eventId"));
+        }
+
+        if (string.IsNullOrWhiteSpace(evt.FlightId))
+        {
+            return new HandleOutcome.Rejected(new MissingEventIdentity("flightId"));
+        }
+
         var command = FlightNumber.Parse(evt.FlightNumber).Bind(flight => ToCommand(flight, evt));
         return command switch
         {

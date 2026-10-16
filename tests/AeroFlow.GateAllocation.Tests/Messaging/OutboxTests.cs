@@ -169,6 +169,32 @@ public sealed class OutboxTests
     }
 
     [Fact]
+    public async Task Redelivered_message_is_ignored_by_id_while_its_event_is_still_pending()
+    {
+        var scheduled = Event(FlightEventType.Scheduled);
+        _handler.Handle(scheduled);
+        _publisher.FailNext = true;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _dispatcher.DrainAsync(CancellationToken.None));
+
+        Assert.IsType<HandleOutcome.Ignored>(_handler.Handle(scheduled)); // same message: the id check, not AlreadyAllocated
+
+        Assert.Single(_store.Pending());
+        await _dispatcher.DrainAsync(CancellationToken.None);
+        Assert.Single(_publisher.Sent);
+    }
+
+    [Fact]
+    public async Task Drain_stops_when_another_drainer_already_acknowledged_the_head()
+    {
+        _handler.Handle(Event(FlightEventType.Scheduled));
+        _handler.Handle(Event(FlightEventType.Departed));
+        _publisher.BeforeSend = evt => _store.MarkPublished(evt); // someone else acks the head first
+
+        Assert.Equal(0, await _dispatcher.DrainAsync(CancellationToken.None));
+        Assert.Equal(1, _publisher.Attempts); // stopped instead of walking the stale snapshot
+    }
+
+    [Fact]
     public void Derive_matches_the_rfc_uuid_v5_test_vector()
     {
         // uuid5(NAMESPACE_DNS, "www.example.com") from RFC 9562 / Python's uuid module: pins ids across versions.
@@ -247,30 +273,58 @@ public sealed class OutboxTests
 
     private sealed class FlakyPublisher : IGateEventPublisher
     {
-        public bool FailNext { get; set; }
+        // Written on the dispatcher's thread and read by the test: everything goes through the lock.
+        private readonly object _gate = new();
+        private readonly List<GateEvent> _sent = [];
+        private bool _failNext;
+        private bool _throwCancelled;
+        private int _attempts;
 
-        public bool ThrowCancelled { get; set; }
+        public bool FailNext { set { lock (_gate) { _failNext = value; } } }
 
-        public int Attempts { get; private set; }
+        public bool ThrowCancelled { set { lock (_gate) { _throwCancelled = value; } } }
 
-        public List<GateEvent> Sent { get; } = [];
+        /// <summary>Runs before each send; lets a test act as a second drainer.</summary>
+        public Action<GateEvent>? BeforeSend { get; set; }
+
+        public int Attempts => Volatile.Read(ref _attempts);
+
+        public IReadOnlyList<GateEvent> Sent
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return [.. _sent];
+                }
+            }
+        }
 
         public Task PublishAsync(IReadOnlyCollection<GateEvent> events, CancellationToken cancellationToken)
         {
-            Attempts++;
-            if (ThrowCancelled)
+            Interlocked.Increment(ref _attempts);
+            foreach (var evt in events)
             {
-                ThrowCancelled = false;
-                throw new TaskCanceledException("send timed out");
+                BeforeSend?.Invoke(evt);
             }
 
-            if (FailNext)
+            lock (_gate)
             {
-                FailNext = false;
-                throw new InvalidOperationException("bus down");
+                if (_throwCancelled)
+                {
+                    _throwCancelled = false;
+                    throw new TaskCanceledException("send timed out");
+                }
+
+                if (_failNext)
+                {
+                    _failNext = false;
+                    throw new InvalidOperationException("bus down");
+                }
+
+                _sent.AddRange(events);
             }
 
-            Sent.AddRange(events);
             return Task.CompletedTask;
         }
     }

@@ -1,0 +1,10 @@
+{
+  "eventId": "22222222-2222-5222-8222-222222222201",
+  "eventType": "GateAssigned",
+  "flightNumber": "BA123",
+  "flightId": "SIM-00001",
+  "gate": "12",
+  "occurredAt": "2026-10-18T08:00:00+00:00",
+  "onBlock": "2026-10-18T08:15:00+00:00",
+  "offBlock": "2026-10-18T09:00:00+00:00"
+}

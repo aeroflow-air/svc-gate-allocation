@@ -45,6 +45,49 @@ public sealed class GateEventHandlerTests
         Assert.Equal(Departure.AddMinutes(30), Allocation("BA123").Turn.Window.End);
     }
 
+    [Fact]
+    public void Delay_without_a_clash_retimes_on_the_same_gate()
+    {
+        _handler.Handle(Event(FlightEventType.Scheduled, "BA1"));
+
+        _handler.Handle(Event(FlightEventType.Delayed, "BA1") with { DelayMinutes = 30 }, out var events);
+
+        var changed = Assert.Single(events);
+        Assert.Equal((GateEventType.GateChanged, "1", (string?)null), (changed.EventType, changed.Gate, changed.PreviousGate));
+    }
+
+    [Fact]
+    public void Delay_that_clashes_moves_to_a_free_gate_and_publishes_GateChanged_with_previous_gate()
+    {
+        _handler.Handle(Event(FlightEventType.Scheduled, "BA1"));                                                      // gate 1, 17:15-18:00
+        _handler.Handle(Event(FlightEventType.Scheduled, "BA2") with { ScheduledDeparture = Departure.AddMinutes(90) }); // gate 1, 18:45-19:30
+
+        var outcome = _handler.Handle(Event(FlightEventType.Delayed, "BA1") with { DelayMinutes = 60 }, out var events);
+
+        Assert.Equal(new HandleOutcome.Applied(nameof(RetimeTurn)), outcome);
+        Assert.Equal("2", Allocation("BA1").Gate.Value);
+        Assert.Equal(Departure.AddMinutes(60), Allocation("BA1").Turn.Window.End);
+        var changed = Assert.Single(events);
+        Assert.Equal((GateEventType.GateChanged, "2", "1"), (changed.EventType, changed.Gate, changed.PreviousGate));
+        Assert.Equal(Departure.AddMinutes(60), changed.OffBlock);
+    }
+
+    [Fact]
+    public void Delay_that_clashes_with_no_free_gate_keeps_the_original_gate_and_window()
+    {
+        _handler.Handle(Event(FlightEventType.Scheduled, "BA1"));                                                      // gate 1
+        _handler.Handle(Event(FlightEventType.Scheduled, "BA2") with { ScheduledDeparture = Departure.AddMinutes(90) }); // gate 1
+        _handler.Handle(Event(FlightEventType.Scheduled, "BA3") with { ScheduledDeparture = Departure.AddMinutes(90) }); // gate 2
+
+        var outcome = Assert.IsType<HandleOutcome.Rejected>(
+            _handler.Handle(Event(FlightEventType.Delayed, "BA1") with { DelayMinutes = 60 }, out var events));
+
+        Assert.IsType<NoGateAvailable>(outcome.Error);
+        Assert.Empty(events);
+        Assert.Equal("1", Allocation("BA1").Gate.Value);
+        Assert.Equal(Departure, Allocation("BA1").Turn.Window.End);
+    }
+
     [Theory]
     [InlineData(FlightEventType.Departed)]
     [InlineData(FlightEventType.Cancelled)]

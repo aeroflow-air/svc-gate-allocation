@@ -43,7 +43,7 @@ When the service runs inside the AeroFlow Aspire AppHost ([`aeroflow-local`](htt
 | Event | Command |
 | --- | --- |
 | `Scheduled` | `AllocateGate`, planner picks the gate; on block 45 minutes before departure, off block at departure |
-| `Delayed` | `RetimeTurn` by `delayMinutes` |
+| `Delayed` | `RetimeTurn` by `delayMinutes`. If the new window clashes on the current gate, the turn moves to the best free compatible gate (`GateChanged` with `previousGate`). If no gate fits, the flight keeps its gate and old window, nothing is published, and the event is logged as rejected (`no_gate_available`). |
 | `Departed`, `Cancelled` | `ReleaseGate` |
 | `Boarding`, `Landed`, arrivals | ignored |
 

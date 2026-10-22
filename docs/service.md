@@ -74,7 +74,7 @@ Errors are `application/problem+json` with a `code` extension: 400 for validatio
 | Topic | Subscription | Event types handled | Effect | Ignored |
 | --- | --- | --- | --- | --- |
 | `flight-events` | `gate-allocation` | `Scheduled` | `AllocateGate`, planner picks; window 45 min before `scheduledDeparture` to departure, size C; then `GateAssigned` | flights whose `origin` is not `HomeAirport` |
-| | | `Delayed` | `RetimeTurn` to `scheduledDeparture + delayMinutes`; then `GateChanged` | |
+| | | `Delayed` | `RetimeTurn` to `scheduledDeparture + delayMinutes`; on a clash, move to the best free compatible gate (smallest fitting, then id); then `GateChanged` (`previousGate` set if moved). No gate fits: plan unchanged, no event, warning `no_gate_available` | |
 | | | `Departed`, `Cancelled` | `ReleaseGate`; then `GateReleased` | |
 | | | | | `Boarding`, `Landed` |
 

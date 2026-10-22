@@ -21,7 +21,8 @@ public abstract record HandleOutcome
 
 /// <summary>
 /// Turns simulator flight events into gate commands for departures from the home airport:
-/// <c>Scheduled</c> allocates a gate (the planner picks one), <c>Delayed</c> retimes the turn,
+/// <c>Scheduled</c> allocates a gate (the planner picks one), <c>Delayed</c> retimes the turn (moving it to a free gate if
+/// the new window clashes on its current gate; if none is free the flight keeps its gate and old window, and the event is rejected),
 /// <c>Departed</c> and <c>Cancelled</c> release the gate. Arrivals are ignored for now.
 /// </summary>
 public sealed class GateEventHandler(IGatePlanStore store, IOptions<FlightEventsOptions> options, TimeProvider? clock = null)
@@ -103,7 +104,7 @@ public sealed class GateEventHandler(IGatePlanStore store, IOptions<FlightEvents
         FlightEventType.Scheduled => Window(evt.ScheduledDeparture).Map(window =>
             Some(new AllocateGate(new Turn(flight, _options.DefaultAircraftSize, window), Option.None<GateId>()))),
         FlightEventType.Delayed => Window(evt.ScheduledDeparture.AddMinutes(evt.DelayMinutes ?? 0)).Map(window =>
-            Some(new RetimeTurn(flight, window))),
+            Some(new RetimeTurn(flight, window, MoveOnConflict: true))),
         FlightEventType.Departed or FlightEventType.Cancelled => Some(new ReleaseGate(flight)),
         _ => Option.None<GateCommand>(),
     };

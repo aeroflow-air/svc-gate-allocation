@@ -43,7 +43,21 @@ public static class GatePlanner
             : Place(plan, current.Turn, c.Gate));
 
     private static Result<GatePlan> Retime(GatePlan plan, RetimeTurn c) =>
-        Existing(plan, c.Flight).Bind(current => Place(plan, current.Turn with { Window = c.Window }, current.Gate));
+        Existing(plan, c.Flight).Bind(current =>
+        {
+            var turn = current.Turn with { Window = c.Window };
+            var sameGate = Place(plan, turn, current.Gate);
+            if (!c.MoveOnConflict || sameGate is not Result<GatePlan>.Failure { Error: GateConflict })
+            {
+                return sameGate;
+            }
+
+            // Clash on the current gate: move to the best free gate for the new window (Check ignores the flight's
+            // own allocation, so the current gate is never "free" here). No gate fits: fail and leave the plan alone.
+            return Suggest(plan, turn)
+                .ToResult(() => new NoGateAvailable(c.Flight))
+                .Bind(gate => Place(plan, turn, gate));
+        });
 
     private static Result<GatePlan> Release(GatePlan plan, ReleaseGate c) =>
         Existing(plan, c.Flight).Map(current => plan with { Allocations = plan.Allocations.Remove(current.Flight) });

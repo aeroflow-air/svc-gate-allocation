@@ -15,8 +15,12 @@ public sealed record AllocateGate(Turn Turn, Option<GateId> Gate) : GateCommand;
 
 public sealed record ReassignGate(FlightNumber Flight, GateId Gate) : GateCommand;
 
-/// <summary>The flight's on-block window moved (a delay, say); it keeps its gate if the new window still fits.</summary>
-public sealed record RetimeTurn(FlightNumber Flight, TimeWindow Window) : GateCommand;
+/// <summary>
+/// The flight's on-block window moved (a delay, say); it keeps its gate if the new window still fits.
+/// With <paramref name="MoveOnConflict"/>, a clash on the current gate moves the turn to the best free compatible gate
+/// instead; if no gate fits, the command fails with <see cref="NoGateAvailable"/> and the plan is unchanged.
+/// </summary>
+public sealed record RetimeTurn(FlightNumber Flight, TimeWindow Window, bool MoveOnConflict = false) : GateCommand;
 
 public sealed record ReleaseGate(FlightNumber Flight) : GateCommand;
 

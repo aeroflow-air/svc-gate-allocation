@@ -173,6 +173,42 @@ public sealed class GatePlannerTests
     }
 
     [Fact]
+    public void Retime_with_move_keeps_the_gate_when_there_is_no_clash()
+    {
+        var plan = Empty().With(AllocateTo("1", Turn("AF204", 0, 60)), AllocateTo("1", Turn("AF310", 120, 180)));
+
+        var retimed = AssertResult.Ok(GatePlanner.Apply(plan, new RetimeTurn(Flight("AF204"), Window(20, 80), MoveOnConflict: true)));
+
+        Assert.Equal(Id("1"), GateOf(retimed, "AF204"));
+    }
+
+    [Fact]
+    public void Retime_with_move_on_a_clash_moves_to_the_best_free_gate()
+    {
+        var plan = Empty().With(AllocateTo("1", Turn("AF204", 0, 60)), AllocateTo("1", Turn("AF310", 90, 150)));
+
+        var moved = AssertResult.Ok(GatePlanner.Apply(plan, new RetimeTurn(Flight("AF204"), Window(40, 100), MoveOnConflict: true)));
+
+        var allocation = Assert.IsType<Option<Allocation>.Some>(moved.AllocationFor(Flight("AF204"))).Value;
+        Assert.Equal((Id("2"), Window(40, 100)), (allocation.Gate, allocation.Turn.Window));
+        Assert.Equal(Id("1"), GateOf(moved, "AF310"));
+    }
+
+    [Fact]
+    public void Retime_with_move_and_no_free_gate_fails_and_leaves_the_plan_alone()
+    {
+        var plan = Empty().With(
+            AllocateTo("1", Turn("AF204", 0, 60)),
+            AllocateTo("1", Turn("AF310", 90, 150)),
+            AllocateTo("2", Turn("AF311", 90, 150)),
+            AllocateTo("3", Turn("AF312", 90, 150)));
+
+        var error = AssertResult.Failure<NoGateAvailable>(GatePlanner.Apply(plan, new RetimeTurn(Flight("AF204"), Window(40, 100), MoveOnConflict: true)));
+
+        Assert.Equal(Flight("AF204"), error.Flight);
+    }
+
+    [Fact]
     public void Release_removes_the_allocation()
     {
         var plan = Empty().With(AllocateTo("1", Turn("AF204", 0, 60)));

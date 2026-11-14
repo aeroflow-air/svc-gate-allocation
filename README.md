@@ -141,7 +141,7 @@ Infrastructure as Bicep will land under [`infra/`](infra/README.md) later, using
 
 ## CI
 
-This repository calls the reusable workflow in `aeroflow-workflows` (pinned to `@v0.5.0`) via `.github/workflows/ci.yml`, targeting `AeroFlow.GateAllocation.sln`.
+This repository calls the reusable workflows in `aeroflow-workflows` (pinned to `@v0.5.0`) via `.github/workflows/ci.yml`, targeting `AeroFlow.GateAllocation.sln`, and `.github/workflows/workload.yml`, which validates `workload.yaml`, generates Bicep, and runs PSRule for Azure.
 
 ## Pointers
 

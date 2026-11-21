@@ -1,5 +1,6 @@
 using AeroFlow.GateAllocation.Domain;
 using Azure.Messaging.ServiceBus;
+using AeroFlow.ServiceDefaults;
 using Microsoft.Extensions.Options;
 
 namespace AeroFlow.GateAllocation.Messaging;
@@ -28,7 +29,8 @@ public sealed class NoOpGateEventPublisher : IGateEventPublisher
 public sealed partial class ServiceBusGateEventPublisher(
     ServiceBusClient client,
     IOptions<GateEventsOptions> options,
-    ILogger<ServiceBusGateEventPublisher> logger) : IGateEventPublisher, IAsyncDisposable
+    ILogger<ServiceBusGateEventPublisher> logger,
+    IObservabilityLog observability) : IGateEventPublisher, IAsyncDisposable
 {
     private readonly ILogger _logger = logger;
     private readonly ServiceBusSender _sender = client.CreateSender(options.Value.Topic);
@@ -44,15 +46,26 @@ public sealed partial class ServiceBusGateEventPublisher(
 
     public async Task PublishAsync(IReadOnlyCollection<GateEvent> events, CancellationToken cancellationToken)
     {
+        var topic = options.Value.Topic;
         foreach (var evt in events)
         {
-            await _sender.SendMessageAsync(ToMessage(evt), cancellationToken);
+            try
+            {
+                await _sender.SendMessageAsync(ToMessage(evt), cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                observability.MessagePublishFailed(topic, evt.EventType.ToString(), evt.EventId.ToString(), ex, evt.FlightId);
+                throw;
+            }
+
+            observability.MessagePublished(topic, evt.EventType.ToString(), evt.EventId.ToString(), evt.FlightId);
             LogPublished(evt.EventType, evt.FlightNumber, evt.Gate);
         }
     }
 
     public ValueTask DisposeAsync() => _sender.DisposeAsync();
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Published {EventType} for {FlightNumber} at gate {Gate}")]
+    [LoggerMessage(EventId = 10_006, Level = LogLevel.Information, Message = "Published {EventType} for {FlightNumber} at gate {Gate}")]
     private partial void LogPublished(GateEventType eventType, string flightNumber, string gate);
 }

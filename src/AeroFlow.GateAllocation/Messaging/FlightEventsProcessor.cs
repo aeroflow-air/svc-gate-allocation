@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Azure.Messaging.ServiceBus;
+using AeroFlow.ServiceDefaults;
 using Microsoft.Extensions.Options;
 
 namespace AeroFlow.GateAllocation.Messaging;
@@ -14,7 +15,8 @@ public sealed partial class FlightEventsProcessor(
     GateEventHandler handler,
     OutboxDispatcher outbox,
     IOptions<FlightEventsOptions> options,
-    ILogger<FlightEventsProcessor> logger) : IHostedService, IAsyncDisposable
+    ILogger<FlightEventsProcessor> logger,
+    IObservabilityLog observability) : IHostedService, IAsyncDisposable
 {
     // Field needed by the .NET 8 [LoggerMessage] generator (it doesn't read primary-ctor params).
     private readonly ILogger _logger = logger;
@@ -60,12 +62,14 @@ public sealed partial class FlightEventsProcessor(
         catch (JsonException ex)
         {
             LogUnreadable(ex, args.Message.MessageId);
+            Consumed(args, MessageOutcomes.DeadLettered, flightId: null);
             await args.DeadLetterMessageAsync(args.Message, "unreadable", ex.Message, args.CancellationToken);
             return;
         }
 
         if (evt is null)
         {
+            Consumed(args, MessageOutcomes.DeadLettered, flightId: null);
             await args.DeadLetterMessageAsync(args.Message, "unreadable", "empty body", args.CancellationToken);
             return;
         }
@@ -74,6 +78,7 @@ public sealed partial class FlightEventsProcessor(
         {
             case HandleOutcome.Applied a:
                 LogApplied(a.Command, evt.FlightNumber, evt.EventType);
+                Consumed(args, MessageOutcomes.Applied, evt.FlightId, evt);
                 // The events are already in the outbox with the plan change; wake the dispatcher to send them.
                 // Completing the message is then safe: a failed send is retried by the dispatcher, not lost.
                 if (gateEvents.Count > 0)
@@ -84,9 +89,11 @@ public sealed partial class FlightEventsProcessor(
                 break;
             case HandleOutcome.Rejected r:
                 LogRejected(evt.EventType, evt.FlightNumber, r.Error.Code, r.Error.Message);
+                Consumed(args, MessageOutcomes.Rejected, evt.FlightId, evt);
                 break;
             case HandleOutcome.Ignored i:
                 LogIgnored(evt.EventType, evt.FlightNumber, i.Reason);
+                Consumed(args, MessageOutcomes.Ignored, evt.FlightId, evt);
                 break;
         }
 
@@ -96,24 +103,37 @@ public sealed partial class FlightEventsProcessor(
     private Task OnErrorAsync(ProcessErrorEventArgs args)
     {
         LogProcessorError(args.Exception, args.ErrorSource.ToString());
+        observability.OperationFailed("flight-events-processor", args.Exception, flightId: null);
         return Task.CompletedTask;
     }
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Listening for flight events on {Topic}/{Subscription}")]
+    private void Consumed(ProcessMessageEventArgs args, string outcome, string? flightId, FlightEventMessage? evt = null)
+    {
+        var o = options.Value;
+        observability.MessageConsumed(
+            o.Topic,
+            o.Subscription,
+            evt?.EventType.ToString() ?? args.Message.Subject,
+            evt?.EventId.ToString() ?? args.Message.MessageId,
+            outcome,
+            flightId);
+    }
+
+    [LoggerMessage(EventId = 10_000, Level = LogLevel.Information, Message = "Listening for flight events on {Topic}/{Subscription}")]
     private partial void LogStarted(string topic, string subscription);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "{Command} for {FlightNumber} after {EventType}")]
+    [LoggerMessage(EventId = 10_001, Level = LogLevel.Information, Message = "{Command} for {FlightNumber} after {EventType}")]
     private partial void LogApplied(string command, string flightNumber, FlightEventType eventType);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "{EventType} for {FlightNumber} rejected: {Code} {Message}")]
+    [LoggerMessage(EventId = 10_002, Level = LogLevel.Warning, Message = "{EventType} for {FlightNumber} rejected: {Code} {Message}")]
     private partial void LogRejected(FlightEventType eventType, string flightNumber, string code, string message);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "{EventType} for {FlightNumber} ignored: {Reason}")]
+    [LoggerMessage(EventId = 10_003, Level = LogLevel.Debug, Message = "{EventType} for {FlightNumber} ignored: {Reason}")]
     private partial void LogIgnored(FlightEventType eventType, string flightNumber, string reason);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Dead-lettered unreadable flight event {MessageId}")]
+    [LoggerMessage(EventId = 10_004, Level = LogLevel.Warning, Message = "Dead-lettered unreadable flight event {MessageId}")]
     private partial void LogUnreadable(Exception ex, string messageId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Service Bus processor error ({Source})")]
+    [LoggerMessage(EventId = 10_005, Level = LogLevel.Warning, Message = "Service Bus processor error ({Source})")]
     private partial void LogProcessorError(Exception ex, string source);
 }

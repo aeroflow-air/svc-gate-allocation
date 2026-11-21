@@ -24,6 +24,16 @@ public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Pr
     }
 
     [Fact]
+    public async Task Alive_returns_healthy()
+    {
+        var response = await _client.GetAsync("/alive");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Equal("Healthy", body);
+    }
+
+    [Fact]
     public async Task Gates_ping_returns_ok()
     {
         var response = await _client.GetAsync("/api/gates/ping");

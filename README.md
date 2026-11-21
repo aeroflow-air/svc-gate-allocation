@@ -1,6 +1,6 @@
 # AeroFlow Gate Allocation
 
-Thin ASP.NET Core Web API that puts flights on gates in the [AeroFlow Air](https://github.com/aeroflow-air) portfolio. Health checks, structured logging, ProblemDetails, and a stub for OpenTelemetry — without a shared framework package.
+Thin ASP.NET Core Web API that puts flights on gates in the [AeroFlow Air](https://github.com/aeroflow-air) portfolio. Health checks, structured logging, ProblemDetails, and OpenTelemetry via `AeroFlow.ServiceDefaults` (local package feed in `lib/packages/`).
 
 ## Local run
 
@@ -12,7 +12,7 @@ dotnet run --project src/AeroFlow.GateAllocation
 ```
 
 - API: `http://localhost:8080` (or the port shown in the console)
-- Health: `GET /health`
+- Health: `GET /health` and `GET /alive`
 - Gate probe: `GET /api/gates/ping`
 - Gates and allocations: see [Gate allocation](#gate-allocation)
 

@@ -3,8 +3,10 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
+COPY nuget.config ./
 COPY Directory.Build.props ./
 COPY AeroFlow.GateAllocation.sln ./
+COPY lib/packages/ lib/packages/
 COPY src/AeroFlow.GateAllocation/AeroFlow.GateAllocation.csproj src/AeroFlow.GateAllocation/
 COPY tests/AeroFlow.GateAllocation.Tests/AeroFlow.GateAllocation.Tests.csproj tests/AeroFlow.GateAllocation.Tests/
 

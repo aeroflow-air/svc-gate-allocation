@@ -55,7 +55,8 @@ flowchart LR
 
 | Method | Route | Purpose | Responses |
 | --- | --- | --- | --- |
-| GET | `/health` | liveness | 200 |
+| GET | `/health` | readiness (and liveness) | 200 |
+| GET | `/alive` | liveness | 200 |
 | GET | `/api/gates/ping` | probe | 200 |
 | GET | `/api/gates` | all gates with their allocations | 200 |
 | GET | `/api/gates/{gate}` | one gate | 200, 400, 404 |
@@ -93,6 +94,48 @@ Contract: `Messaging/FlightEventMessage.cs`, a **local copy** of `AeroFlow.Local
 | `FlightEvents:DefaultAircraftSize` | `C` | size for simulated turns |
 | `GateEvents:Topic` | `gate-events` | topic this service owns |
 | `ApiDocs:Enabled` | false (true in Development) | Scalar and OpenAPI |
+
+### Observability
+
+This service consumes `AeroFlow.ServiceDefaults` from a committed local package feed, pinned in [`lib/README.md`](../lib/README.md). Conventions are in [service-defaults.md](service-defaults.md). `Program` calls `AddServiceDefaults()` and `MapDefaultEndpoints()`, so `/health` and `/alive` are served in every environment. HTTP requests are logged automatically; Service Bus publish and consume paths emit platform events 2000–2003 via `IObservabilityLog`. W3C trace context on Service Bus messages is a later follow-up and is not wired here.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `Observability:ServiceName` | `svc-gate-allocation` | resource attribute `service.name` |
+| `Observability:ServiceVersion` | entry assembly informational version | `service.version` |
+| `Observability:Environment` | `local` | `deployment.environment` (falls back to the host environment if unset) |
+| `Observability:Squad` | `platform` | `aeroflow.squad` |
+
+#### Event catalogue
+
+**Platform** events (category `AeroFlow.ServiceDefaults`):
+
+| Event id | Name | Level | When |
+| --- | --- | --- | --- |
+| 1000 | HttpRequestCompleted | Information | Each HTTP request except `/health` and `/alive` |
+| 1001 | HttpRequestFailed | Warning | The request ended in a 5xx status |
+| 1002 | HttpRequestUnhandled | Error | An unhandled exception escaped the pipeline |
+| 2000 | MessagePublished | Information | A Service Bus message was sent |
+| 2001 | MessagePublishFailed | Error | Sending a Service Bus message failed |
+| 2002 | MessageConsumed | Information | A Service Bus message was handled (`applied`, `rejected`, `ignored`, or `dead-lettered`) |
+| 2003 | MessageConsumeFailed | Error | Handling a Service Bus message failed |
+| 3000 | OperationFailed | Error | An unexpected failure outside a single message (processor error, unloading tick) |
+
+**Business** events (this service, event ids at or above 10,000; domain code stays log-free):
+
+| Event id | Level | Message | When |
+| --- | --- | --- | --- |
+| 10000 | Information | `Listening for flight events on {Topic}/{Subscription}` | Processor started |
+| 10001 | Information | `{Command} for {FlightNumber} after {EventType}` | Flight event applied |
+| 10002 | Warning | `{EventType} for {FlightNumber} rejected: {Code} {Message}` | Business rejection |
+| 10003 | Debug | `{EventType} for {FlightNumber} ignored: {Reason}` | Idempotent / out-of-scope event |
+| 10004 | Warning | `Dead-lettered unreadable flight event {MessageId}` | Body could not be read |
+| 10005 | Warning | `Service Bus processor error ({Source})` | SDK processor error |
+| 10006 | Information | `Published {EventType} for {FlightNumber} at gate {Gate}` | Gate event sent to `gate-events` |
+| 10007 | Warning | `Publishing gate events failed; {Pending} pending in the outbox, retrying in {RetrySeconds}s` | Transient publish failure |
+| 10008 | Error | `Permanent failure publishing gate events ({Reason}); {Pending} pending in the outbox are blocked behind it` | Non-transient publish failure |
+| 10009 | Warning | `Final drain of gate events at shutdown failed` | Last drain threw |
+| 10010 | Warning | `Stopping with {Pending} gate events still in the outbox; they are lost with the in-memory state` | Unsent events at shutdown |
 
 ## Outputs
 
@@ -144,7 +187,7 @@ Inbound delivery is at least once. The handler is idempotent by event id: the st
 
 - Standalone: `dotnet run --project src/AeroFlow.GateAllocation`, then `curl http://localhost:8080/api/gates`; Scalar at `/scalar`.
 - With the airport: clone next to `aeroflow-local` and run its AppHost. Healthy logs: `Listening for flight events on flight-events/gate-allocation`, then `AllocateGate for BA1234 after Scheduled` and a matching `GateAssigned` on `gate-events`.
-- Tests: `dotnet test` covers the planner rules, value types, API (status codes and problem details), API docs, health, the event handler mapping, `GateEvents.Diff`, deterministic event ids and the outbox (failed publish, retry, ordering).
+- Tests: `dotnet test` covers the planner rules, value types, API (status codes and problem details), API docs, health, `/alive`, the observability contract, the event handler mapping, `GateEvents.Diff`, deterministic event ids and the outbox (failed publish, retry, ordering).
 - Container: `docker build -t aeroflow-gate-allocation . && docker run --rm -p 8080:8080 aeroflow-gate-allocation`.
 
 ## Known gaps

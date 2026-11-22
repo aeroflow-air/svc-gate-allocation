@@ -1,6 +1,6 @@
 # AeroFlow Gate Allocation
 
-Thin ASP.NET Core Web API that puts flights on gates in the [AeroFlow Air](https://github.com/aeroflow-air) portfolio. Health checks, structured logging, ProblemDetails, and OpenTelemetry via `AeroFlow.ServiceDefaults` (local package feed in `lib/packages/`).
+Thin ASP.NET Core Web API that puts flights on gates in the [AeroFlow Air](https://github.com/aeroflow-air) portfolio. Health checks, structured logging, ProblemDetails, and OpenTelemetry via `AeroFlow.ServiceDefaults` 0.1.1 from the org GitHub Packages feed.
 
 ## Local run
 
@@ -120,6 +120,32 @@ curl -X POST http://localhost:8080/api/gates/12/close \
 
 This service follows [ADR-0004: functional-style C#](https://github.com/aeroflow-air/platform-handbook/blob/main/docs/decisions/0004-functional-style-csharp.md). It uses immutable records, closed sum types, and a pure domain core with side effects at the edges (controllers, store and `TimeProvider`). Failures come back as explicit `Result` values rather than exceptions, and absent values as `Option` rather than `null`. It uses only the BCL, with no FP library.
 
+
+## NuGet feed (GitHub Packages)
+
+`AeroFlow.ServiceDefaults` 0.1.1 comes from `https://nuget.pkg.github.com/aeroflow-air/index.json`. GitHub Packages requires authentication even though the org and packages are public. Do not put a token in the committed `nuget.config`.
+
+Create a personal access token with the `read:packages` scope (a classic token, or a fine-grained token with read access to packages in `aeroflow-air`). This repository does not create or store that token. Add the source to your **user-level** NuGet config:
+
+```bash
+dotnet nuget add source https://nuget.pkg.github.com/aeroflow-air/index.json \
+  --name aeroflow-air \
+  --username YOUR_GITHUB_USERNAME \
+  --password YOUR_TOKEN \
+  --store-password-in-clear-text
+```
+
+If the source already exists, update the credentials instead of adding it twice. More detail is in the [lib-service-defaults consume guide](https://github.com/aeroflow-air/lib-service-defaults#consume).
+
+CI calls `aeroflow-workflows` `dotnet-ci.yml@v0.7.0` with `github-packages: true` and job permission `packages: read`.
+
+For container builds, pass the same token as a BuildKit secret (it is not written into an image layer):
+
+```bash
+export NUGET_AUTH_TOKEN=...   # PAT with read:packages; do not commit this
+docker build --secret id=nuget_auth_token,env=NUGET_AUTH_TOKEN -t <image> .
+```
+
 ## Container
 
 ```bash
@@ -141,7 +167,7 @@ Infrastructure as Bicep will land under [`infra/`](infra/README.md) later, using
 
 ## CI
 
-This repository calls the reusable workflows in `aeroflow-workflows` (pinned to `@v0.5.0`) via `.github/workflows/ci.yml`, targeting `AeroFlow.GateAllocation.sln`, and `.github/workflows/workload.yml`, which validates `workload.yaml`, generates Bicep, and runs PSRule for Azure.
+This repository calls the reusable workflows in `aeroflow-workflows` via `.github/workflows/ci.yml` (`dotnet-ci.yml@v0.7.0` with `github-packages: true` and `packages: read`), targeting `AeroFlow.GateAllocation.sln`, and `.github/workflows/workload.yml` (still pinned to `@v0.5.0`), which validates `workload.yaml`, generates Bicep, and runs PSRule for Azure.
 
 ## Pointers
 

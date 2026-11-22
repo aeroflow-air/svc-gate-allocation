@@ -19,7 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\AeroFlow.GateAllocation\AeroFlow.GateAllocation.csproj" />
-    <PackageReference Include="AeroFlow.ServiceDefaults.Testing" Version="0.1.0" />
+    <PackageReference Include="AeroFlow.ServiceDefaults.Testing" Version="0.1.1" />
   </ItemGroup>
 
   <ItemGroup>

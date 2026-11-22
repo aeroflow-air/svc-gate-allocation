@@ -30,8 +30,8 @@ Assigns gates (stands) at LHR to departing flights and publishes the changes. Ow
   idempotent: the processed id is stored in the same atomic update, so a redelivery is `Ignored`. Late or
   out-of-order events return `Ignored`/`Rejected`, never throw. An unknown `FlightEventType` is dead-lettered as
   `unreadable`, so a new flight event type needs this service updated first.
-- Handler, outbox and contract tests cover this, but nothing blocks a direct publish. * `workload.yaml` is
-  schema-checked (`workload.yml`); it doesn't declare `queue`/`events:` yet, which is a separate fix.
+- Handler, outbox and contract tests cover this, but nothing blocks a direct publish. * `workload.yaml` declares
+  `queue` + `events:` (publishes `gate-events`, subscribes `flight-events`/`gate-allocation`); `workload.yml` checks it.
 
 ## Build, test, docs, skills
 `dotnet build -c Release && dotnet test`; domain tests need no mocks. Update `docs/service.md` with behaviour changes.

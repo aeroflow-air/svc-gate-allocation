@@ -197,5 +197,5 @@ Inbound delivery is at least once. The handler is idempotent by event id: the st
 - svc-flight-status still invents gate `TBA` at `Boarding`; it does not subscribe to `gate-events` yet.
 - Arrivals are ignored; every simulated aircraft is size C.
 - Event contracts are local copies ([platform-handbook#71](https://github.com/aeroflow-air/platform-handbook/issues/71)).
-- `workload.yaml` cannot declare the `flight-events` / `gate-events` subscriptions ([platform-handbook#64](https://github.com/aeroflow-air/platform-handbook/issues/64)); this repo also has no workload CI yet.
+- `workload.yaml` declares the `gate-events` topic and the `flight-events` / `gate-allocation` subscription, and `workload.yml` validates it and generates the Bicep. Deploying it is still open ([platform-handbook#64](https://github.com/aeroflow-air/platform-handbook/issues/64)).
 - In-memory state; no authentication.
